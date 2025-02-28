@@ -1,0 +1,828 @@
+---
+title: "Catalase_analysis.Rmd"
+author: "Sam Gurr"
+date: "2024-10-31"
+output: html_document
+---
+
+### SET UP
+
+* note: add your own directory below to navigate to RAnalysis folder containing the data, output, and script subfolders 
+that reflect the google drive. alterntively clone the repository EAD-ASEB-Cvirginica_Thermal_Performance from github
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+# knitr::opts_knit$set(root.dir = "C:/Users/katherine.mcfarland/Documents/GitHub/EAD-ASEB-Cvirginica_Thermal_Performance/larvae") # Katie's
+knitr::opts_knit$set(root.dir = "C:/Users/samjg/Documents/Github_repositories/Cgigas_SMIF_2024/RAnalysis") # Sam's
+#knitr::opts_knit$set(root.dir = "C:/Users/samuel.gurr/Documents/Github_repositories/EAD-ASEB-Cvirginica_Thermal_Performance/RAnalysis") # Sam's work
+
+```
+
+
+## Load packages 
+
+* use install.packges('pacakge name') if you do not have these downloaded
+```{r setup, include=TRUE}
+
+library(ggpubr)
+library(ggplot2)
+library(dplyr)
+library(lmtest) # to receive p value from betareg model
+# library(FSA) # for the Dun test post hoc for SRH non-parametric 2 way anova]
+library(emmeans)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(car)
+library(lmerTest)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(nlme)
+library(rcompanion) # to run the Schrier -Ray-Hare non parametric 2 way 
+library(ggpmisc) # stat_poly for inserting equation and R2 for ggplot line 
+```
+
+## Function to load files
+
+-   At your service, from 'spec to table' ...I'm so funny
+
+```{r Spec_to_table}
+
+Spec_to_table <- function(datapath, platenumber, daterecorded) {
+  
+# import the data in raw text form exported from the spectrophotometer
+        rawtextfile <- read.delim(datapath,
+                              header = F,
+                              skip=3,
+                              fileEncoding="latin1")
+  
+
+        rawmatrix   <- as.matrix(rawtextfile[c(1:8),c(3:14)])
+        colnames(rawmatrix) = c("1","2","3","4","5","6","7","8","9","10","11","12")
+        rownames(rawmatrix) = c("A","B","C","D","E","F","G","H")
+        
+        raw_table <- as.data.frame.table(rawmatrix, responseName = "value") %>% 
+                                    dplyr::rename(well_row=Var1, well_column=Var2, absorbance_nm=value) %>% 
+                                    dplyr::mutate(well=paste0(well_row,well_column),
+                                                  Run_date =daterecorded,
+                                                  Plate=platenumber) %>% 
+                                    dplyr::select(-c(well_row,well_column))
+        # reorder the columns because I prefer it this way..
+        
+        raw_table_ordered <- raw_table[,c(3,4,2,1)]
+}
+
+
+```
+
+-   Use the spec_to_table to import raw spec txt files and compile to a table, yes that is what it does
+
+```{r load Catalase raw data and merge}
+
+# plate 1 
+catalase_plate1 <- Spec_to_table('Data/raw_data/catalase/20250219_catalase_plate1.txt', 1, 20250219) %>%  
+                                  dplyr::rename(Cat_Absorbance_560nm=absorbance_nm) 
+# plate 2 
+catalase_plate2 <- Spec_to_table('Data/raw_data/catalase/20250219_catalase_plate2.txt', 2, 20250219) %>%  
+                                  dplyr::rename(Cat_Absorbance_560nm=absorbance_nm) 
+
+# master 
+catalase_raw <- rbind(catalase_plate1, catalase_plate2)
+
+```
+
+```{r load Total protein correction data for catalase}
+
+# plate 1 
+totalprotein_plate1 <- Spec_to_table('Data/raw_data/catalase/20250221_total_protein_catalase_plate1.txt', 1, 20250221) %>%  
+                                  dplyr::rename(TP_Absorbance_562nm=absorbance_nm) 
+
+# plate 2
+totalprotein_plate2 <- Spec_to_table('Data/raw_data/catalase/20250221_total_protein_catalase_plate2.txt', 2, 20250221) %>%  
+                                  dplyr::rename(TP_Absorbance_562nm=absorbance_nm) 
+
+# master 
+totalprotein_raw <- rbind(totalprotein_plate1, totalprotein_plate2)
+
+```
+
+
+```{r load reference metadata and call target datasets}
+
+metadata <- read.csv('Data/raw_data/plate_metadata.csv', sep = ",", header=T) 
+
+# rename a few columns so they can merge with the data (in next chunk)
+
+# Plate 1 
+meta.catalase_plate1 <- metadata %>% 
+                        dplyr::filter(Assay.Type %in% "Catalase" & Plate.Number == 1) %>% 
+                        dplyr::rename(Plate = Plate.Number,
+                                      well  = Well.ID)
+# Plate 2
+meta.catalase_plate2 <- metadata %>% 
+                        dplyr::filter(Assay.Type %in% "Catalase" & Plate.Number == 2) %>% 
+                        dplyr::rename(Plate = Plate.Number,
+                                      well  = Well.ID)
+
+
+
+# Plate 1 
+meta.totalprotein_plate1 <- metadata %>% 
+                                  dplyr::filter(Assay.Type %in% "Total protein - Catalase" & Plate.Number == 1) %>% 
+                                  dplyr::rename(Plate = Plate.Number,
+                                                well  = Well.ID)
+# Plate 2
+meta.totalprotein_plate2 <- metadata %>% 
+                                  dplyr::filter(Assay.Type %in% "Total protein - Catalase" & Plate.Number == 2) %>% 
+                                  dplyr::rename(Plate = Plate.Number,
+                                                well  = Well.ID)
+```
+
+
+* merge metadata with data 
+```{r merge metadata with data}
+
+# Catalase
+# Plate 1 
+catalase_plate1_master <- merge(catalase_plate1, meta.catalase_plate1, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.catalase_plate1) == nrow(catalase_plate1_master) # must be TRUE
+catalase_plate1_master <- subset(catalase_plate1_master, !is.na(Sample.Type)) # now 96  total rows with NAs omitted (not sample, blank nor stnadard)
+
+
+# Plate 2
+catalase_plate2_master <- merge(catalase_plate2, meta.catalase_plate2, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.catalase_plate2) == nrow(catalase_plate2_master) # must be TRUE
+catalase_plate2_master <- subset(catalase_plate2_master, !is.na(Sample.Type)) # now 52  total rows with NAs omitted (not sample, blank nor stnadard)
+
+
+
+
+
+
+# Total protein
+# Plate 1 
+totalprotein_plate1_master <- merge(totalprotein_plate1, meta.totalprotein_plate1, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.totalprotein_plate1) == nrow(totalprotein_plate1_master) # must be TRUE
+totalprotein_plate1_master <- subset(totalprotein_plate1_master, !is.na(Sample.Type)) # now 96  total rows with NAs omitted (not sample, blank nor stnadard)
+
+# Plate 2 
+totalprotein_plate2_master <- merge(totalprotein_plate2, meta.totalprotein_plate2, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.totalprotein_plate2) == nrow(totalprotein_plate2_master) # must be TRUE
+totalprotein_plate2_master <- subset(totalprotein_plate2_master, !is.na(Sample.Type)) # now 58  total rows with NAs omitted (not sample, blank nor stnadard)
+
+```
+
+
+* subset standards, blanks, and samples
+```{r subset data types}
+
+# Catalase 
+# Plate 1 
+catalase_plate1.samples   <- catalase_plate1_master %>% dplyr::filter(Sample.Type %in% 'sample') 
+catalase_plate1.standards <- catalase_plate1_master %>% dplyr::filter(Sample.Type %in% 'standard')
+
+(nrow(catalase_plate1.samples) + 
+      nrow(catalase_plate1.standards)) == nrow(catalase_plate1_master) # sanity check, must be true
+
+
+# Plate 2
+catalase_plate2.samples   <- catalase_plate2_master %>% dplyr::filter(Sample.Type %in% 'sample') 
+catalase_plate2.standards <- catalase_plate2_master %>% dplyr::filter(Sample.Type %in% 'standard')
+
+(nrow(catalase_plate2.samples) + 
+      nrow(catalase_plate2.standards)) == nrow(catalase_plate2_master) # sanity check, must be true
+
+
+
+
+
+# Total protein
+# Plate 1 
+totalprotein_plate1.samples    <- totalprotein_plate1_master %>% dplyr::filter(Sample.Type %in% 'sample')
+totalprotein_plate1.blanks     <- totalprotein_plate1_master %>% dplyr::filter(Sample.Type %in% 'blank')
+totalprotein_plate1.standards  <- totalprotein_plate1_master %>% dplyr::filter(Sample.Type %in% c('standard', 'blank'))
+
+(nrow(totalprotein_plate1.samples) + 
+      nrow(totalprotein_plate1.standards)) == nrow(totalprotein_plate1_master) # sanity check, must be true
+
+
+# Plate 2
+totalprotein_plate2.samples    <- totalprotein_plate2_master %>% dplyr::filter(Sample.Type %in% 'sample')
+totalprotein_plate2.blanks     <- totalprotein_plate2_master %>% dplyr::filter(Sample.Type %in% 'blank')
+totalprotein_plate2.standards  <- totalprotein_plate2_master %>% dplyr::filter(Sample.Type %in% c('standard', 'blank'))
+
+(nrow(totalprotein_plate2.samples) + 
+      nrow(totalprotein_plate2.standards)) == nrow(totalprotein_plate2_master) # sanity check, must be true
+
+```
+
+## Total protein calculations 
+
+```{r total protein standard curve}
+
+# assign known BCA values to standard IDs A-I
+BCA_standards <- rbind(totalprotein_plate1.standards, totalprotein_plate2.standards) %>%  
+  dplyr::mutate(BCA_ug_mL = case_when(Standards %in% 'A' ~ 2000,
+                                      Standards %in% 'B' ~ 1500,
+                                      Standards %in% 'C' ~ 1000,
+                                      Standards %in% 'D' ~ 750,
+                                      Standards %in% 'E' ~ 500,
+                                      Standards %in% 'F' ~ 250,
+                                      Standards %in% 'G' ~ 125,
+                                      Standards %in% 'H' ~ 25,
+                                      Standards %in% 'I' ~ 0)) %>% 
+  dplyr::select(Plate, Standards, BCA_ug_mL, TP_Absorbance_562nm)
+
+# Run standard curve, calculate totalprotein 
+BCA_background_zero <- BCA_standards %>% 
+                        dplyr::filter(Standards %in% 'I') %>% # the zero standard
+                        dplyr::group_by(Plate, Standards, BCA_ug_mL) %>% # group by to get the means
+                        dplyr::summarise_each(funs(mean,sd,se=sd(.)/sqrt(n()))) # get all the stats 
+
+
+# Plate 1, blank to correct by is 0.1289
+# Plate 2, blank to correct by is 0.1336
+
+
+
+# Absorbance corrected - take the mean of any duplicates
+BCA_standards_means <- BCA_standards %>% 
+                        dplyr::filter(!BCA_ug_mL %in% 0) %>% 
+                        dplyr::mutate(Abs_562nm_cor = 
+                                      case_when(Plate == 1 ~ (TP_Absorbance_562nm-0.1289),
+                                                Plate == 2 ~ (TP_Absorbance_562nm-0.1336) ) ) %>% 
+                        dplyr::select(-TP_Absorbance_562nm) %>% 
+                        dplyr::group_by(Plate, Standards, BCA_ug_mL) %>% # group by to get the means
+                        dplyr::summarise_each(funs(mean,sd,se=sd(.)/sqrt(n()))) # get all the stats 
+
+
+# plot it insert the quadratic formaula using ggpmisc
+BCA_stand_plots_quadratic <- BCA_standards_means %>% 
+                    # QUADRATIC SMOOTH LINE WORKS BEST HERE (MANUFACTURERS INSTRUCTIONS)
+                     # dplyr::filter(!(Plate %in% 2 & Standards %in% 'D')) %>% # hash me out to test
+                     ggplot(aes(y=mean, x=BCA_ug_mL)) + 
+                        geom_point() +
+                        theme_bw() +
+                        labs(y= "Net Abs 562nm", x = "Protein Concentration in ug/mL") +
+                        #geom_line() +
+                        #stat_poly_line(color='red') +
+                        #geom_smooth() +
+                        stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+                        stat_poly_eq(parse=T, aes(label = ..eq.label..), formula=y ~ x + I(x^2)) +
+                        ggtitle('Total protein: Quadratic curve') +
+                        #stat_poly_eq(use_label(c("eq", "R2"))) +
+                        facet_wrap(~Plate) 
+
+# output 
+pdf(paste("Output/catalase/plots/Standard_Curve_BCA_Catalase_TP.pdf", sep =''), 
+    width=10, 
+    height=7)
+print(ggarrange(BCA_stand_plots_quadratic))
+dev.off()
+
+```
+
+
+* Use BCA standard curves to calculate TP 
+
+```{r calc TP}
+library(grDevices)
+# Standard curve, Plate 1 equation y = -0.0189 + 0.00101x - 7.71x10^-8x^2 - need to solve for x!
+# Standard curve, Plate 2 equation y = --0.0189 + 0.00196x - 4.42x10^-7x^2 - need to solve for x!
+
+# Standard curve, Plate 1
+a1 <- 4.35*10^-8
+b1 <- 0.00171
+c1 <- 0.0478
+# EQ: (-(b1) + sqrt( (b1^2) - (4*(((a1)-Abs_562nm_cor))*(c1)) ))/(2*a1)
+
+# Standard curve, Plate 2
+a2 <- 1.96*10^-8
+b2 <- 0.00184
+c2 <- 0.0391
+# EQ: (-(b2) + sqrt( (b2^2) - (4*a2*(c2-Abs_562nm_cor)) ) ) / (2*a2)
+
+
+# linear equation plate 1 == (Abs_562nm_cor - 0.192)/0.000993
+# linear equation plate 2 == (Abs_562nm_cor - 0.224)/0.000911
+
+
+# IMPORTANT! we used 25 ul of the standards and 25 ul of the unknowns (samples) 
+# therefore we can interpret the unknown direct to the the standard curve without having 
+# to account for addition factors, fot example, if we used 5 ul unknown (sample) we would have to adjust 
+# by multiplying by 5 to reach the standard curve 
+
+V = 0.025 # 25 ul or 0.025 mL
+
+# Again, remember Plate 1, blank to correct by is 0.1289
+# Again, remember Plate 2, blank to correct by is 0.1336
+
+# Sanity check Lets look at the absorbance vs. totla protein concentration data 
+
+TotalProtein_final <- rbind(totalprotein_plate1.samples, totalprotein_plate2.samples) %>% 
+                      dplyr::select(Plate,
+                                    Sample_ID,
+                                    TP_Absorbance_562nm) %>% 
+                      # dplyr::filter(!Abs_562nm > 3.99) %>% # data as 4.00 is above the detection limit, omit
+                      # dplyr::mutate(Unique_ID = 
+                      #                 paste0('Plate:',Plate,' ',
+                      #                        'ID:',Sample_ID)) %>% # unique ID t0 group by
+                      dplyr::mutate(Abs_562nm_cor = # correct the raw abs, subtract background
+                                   case_when(Plate == 1 ~ (TP_Absorbance_562nm-0.1289), # for plate 1
+                                             Plate == 2 ~ (TP_Absorbance_562nm-0.1336) ) ) %>% # for plate 2 
+                      dplyr::mutate(TotalProtein_ug_mL = 
+                                    case_when(
+                                      # linear fr neg discrim. - luckily only two values from plate 2
+                                      # Scallop_ID %in% c(33, 51) ~ 
+                                      #   ((Abs_562nm_cor - 0.224)/0.000911),
+                                      # quadratic for Plate 1
+                                      Plate == 1 ~ 
+                                        ((-(b1) + sqrt( (b1^2) - (4*a1*(c1-Abs_562nm_cor)) ) ) / (2*a1)), 
+                                      # quadratic for plate 2
+                                      Plate == 2 ~ 
+                                        ((-(b2) + sqrt( (b2^2) - (4*a2*(c2-Abs_562nm_cor)) ) ) / (2*a2)) ),
+                                    # ug per mL concentration to ug in 25 ul sample 
+                                    TotalProtein_ug = TotalProtein_ug_mL*V)
+
+# View(TotalProtein_final)
+nrow(TotalProtein_final) # 118
+
+# NOTE! I found that some of my discriminants are negative (b^2 - 4ac) IN PLATE 2!! (as 'NaN)
+# so Im going to extrapolate from a linear regression curve based on the final samples 
+
+# first lets plot absorbance and actual concentration calacuated 
+calc_BCA_plot <- TotalProtein_final %>% 
+                    ggplot(aes(y = Abs_562nm_cor, 
+                               x  = TotalProtein_ug_mL)) +
+                          geom_point() + 
+                    theme_bw() + 
+                    ggtitle('Total protein: Calculated BCA by Net Absorbance') +
+                    facet_wrap(~Plate)
+calc_BCA_plot 
+
+#print
+pdf(paste("Output/catalase/plots/total_protein_standard_curves.pdf", sep =''), 
+    width=10, 
+    height=8)
+ggpubr::ggarrange(BCA_stand_plots_quadratic,
+          calc_BCA_plot,
+          nrow = 2)
+dev.off()
+# write csv
+write.csv(TotalProtein_final, file = "Output/catalase/total_protein.csv")
+
+
+```
+
+
+###  THIS IS WHERE I LEFT OFF ON 11/7/2024 
+* NOTE: the code below is from the citrate synthase script, need to change throughout to accomodate the variables and values in chunks above
+
+
+## Succinate Calculations
+
+
+* STEP 1: Blanks
+
+  - calc the mean blanks by time and plate. 
+  
+  - **note** this is not a normal blank, but the change of the blank 
+  over time final - time initial. This is important downstream in the calculation, youll see later..
+
+  -  **remember** we recorded every 5 minutes unitl the samples surpased the highest standard
+we only need timepoint initial and timepoint end, lets average for each and truncate later..
+```{r blank rate}
+
+# Plate 1 means - then calc DA412 = (A412)final – (A412)initial
+Plate1.blanks <- Plate1.standards %>% dplyr::filter(Sample.Type %in% 'Blank')
+Plate1.blanks.means  <- aggregate(Plate1.blanks[, 10], list(Plate1.blanks$About), mean) %>%
+                            dplyr::rename(Abs_570nm = x)
+
+
+# Plate 2 means - then calc DA412 = (A412)final – (A412)initial
+Plate2.blanks <- Plate2.standards %>% dplyr::filter(Sample.Type %in% 'Blank')
+Plate2.blanks.means <-  aggregate(Plate2.blanks[, 10], list(Plate2.blanks$About), mean) %>%
+                            dplyr::rename(Abs_570nm = x) 
+
+```
+
+
+
+* STEP 2: Correct for background
+
+  - From protocol (Fluorometric protocol was used!): Determine the slope of the standard florescence values 
+  and calculate the the succinate concetration as follows
+
+SUccinate (uM) = [ F(sample) - F(blank) x n ] / slope (uM)-1
+
+n = sample dilution factor 
+
+**note** if the calculated succinate concentration is >40uM for the Fluorometric assay, dilute the sample in ultrapure water and repeat the assay,
+multipley by the dilution factor 
+
+**important** in one of our succinate runs we diluted the sample that was already in the wells and recorded, The authors here seem to refer to the sample 
+before all reagents are added and incubated to truly 'dilute' the signal, time will tell below whether this is the case because we ran it different ways 
+in order to test! 
+
+  * remember - we used ~10 mg tissue for each sample, keep this is mind when/of repeating this assay
+  
+```{r Correct for background}
+
+## Objectve to subtract the blank from all standards and samples. 
+
+# Plate 1 
+
+Plate1.standards.sub <- Plate1.standards %>% 
+                          dplyr::mutate(Abs_570nm_sub = 
+                                          case_when((About == 'no dilution' & Standards > 0) ~ Abs_570nm - 
+                                                      (Plate1.blanks.means %>% filter(Group.1 %in% 'no dilution'))$Abs_570nm,
+                                                    
+                                                    (About == '5x dilution post' & Standards > 0) ~ Abs_570nm - 
+                                                      (Plate1.blanks.means %>% filter(Group.1 %in% '5x dilution post'))$Abs_570nm,
+                                                    
+                                                    (About == '5x dilution post 30 mins' & Standards > 0) ~ Abs_570nm - 
+                                                      (Plate1.blanks.means %>% filter(Group.1 %in% '5x dilution post 30 mins'))$Abs_570nm,
+                                                    
+                                                    Standards == 0 ~ 0
+                                                    
+                                                    ))
+
+
+Plate1.samples.sub <- Plate1.samples %>% 
+                          dplyr::mutate(Abs_570nm_sub = 
+                                          case_when(About == 'no dilution' ~ Abs_570nm - 
+                                                      (Plate1.blanks.means %>% filter(Group.1 %in% 'no dilution'))$Abs_570nm,
+                                                    
+                                                    About == '5x dilution post' ~ Abs_570nm - 
+                                                      (Plate1.blanks.means %>% filter(Group.1 %in% '5x dilution post'))$Abs_570nm,
+                                                    
+                                                    About == '5x dilution post 30 mins' ~ Abs_570nm - 
+                                                      (Plate1.blanks.means %>% filter(Group.1 %in% '5x dilution post 30 mins'))$Abs_570nm
+                                                    ))
+
+# plate 2
+
+
+Plate2.standards.sub <- Plate2.standards %>% 
+                          dplyr::mutate(Abs_570nm_sub = 
+                                          case_when(Standards > 0 ~ Abs_570nm - Plate2.blanks.means$Abs_570nm,
+                                                    
+                                                    Standards == 0 ~ 0
+                                                    
+                                                    ))
+
+
+Plate2.samples.sub <- Plate2.samples %>% 
+                          dplyr::mutate(Abs_570nm_sub = Abs_570nm - Plate2.blanks.means$Abs_570nm)
+
+
+```
+
+
+```{r Citrate synthase standard curves}
+library('ggpmisc')
+
+# Plate 1
+Plate1_standard_curve <- Plate1.standards.sub %>% 
+                                    dplyr::select(Standards, Abs_570nm_sub, About) %>% 
+                                    # dplyr::filter(Time_min %in% 30) %>% 
+                                    dplyr::group_by(Standards, About) %>% 
+                                    dplyr::summarise(meanAbs = mean(Abs_570nm_sub),
+                                                     sdAbs   = sd(Abs_570nm_sub),
+                                                     n = n()) %>% 
+                          
+                          ggplot(aes(x = as.numeric(Standards), y = as.numeric(meanAbs))) + 
+                          geom_point() + 
+                          stat_poly_line() +
+                          stat_poly_eq(use_label(c("eq", "R2"))) +
+                          theme_bw() + 
+                          xlab('known uM Succinate') +
+                          ylab('Abs at 570 nm') +
+                          facet_wrap(~About)
+
+
+# Plate 2
+Plate2_standard_curve <- Plate2.standards.sub %>% 
+                                    dplyr::select(Standards, Abs_570nm_sub, About) %>% 
+                                    # dplyr::filter(Time_min %in% 30) %>% 
+                                    dplyr::group_by(Standards, About) %>% 
+                                    dplyr::summarise(meanAbs = mean(Abs_570nm_sub),
+                                                     sdAbs   = sd(Abs_570nm_sub),
+                                                     n = n()) %>% 
+                          
+                          ggplot(aes(x = as.numeric(Standards), y = as.numeric(meanAbs))) + 
+                          geom_point() + 
+                          stat_poly_line() +
+                          stat_poly_eq(use_label(c("eq", "R2"))) +
+                          theme_bw() + 
+                          xlab('known uM Succinate') +
+                          ylab('Abs at 570 nm') +
+                          facet_wrap(~About)
+
+
+# output 
+pdf(paste("Output/Colorimetric_assays/Succinate/Standard_Curve_Succinate.pdf", sep =''), 
+    width=10, 
+    height=5)
+ggarrange(Plate1_standard_curve,
+  Plate2_standard_curve,
+  nrow=2)
+dev.off()
+
+```
+
+## Calculate succinate 
+
+* Importantly here we have different dilution factors fr different runs (note: standards were NOT diluted!, remained the same for all runs)
+
+
+Plate 1: 
+
+* calc meanAbs_5xpre from 'no dilution': 20 ul sample added to 80 ul of reagent mix (total / sample = 100 / 20). The dilution factor here is x5 dilution
+
+* calc meanAbs_10xpost from '5x dilution post': we added 100 ul ultra pure water to the sample wells and reran, now 200/20 a 10x dilution total
+
+* calc meanAbs_10xpost30 from '5x dilution post 30 mins': same as above but incubated for 30 minutes and ran again as a sanity check
+
+
+Plate 2: 
+
+* calc meanAbs_10xpre from '5x dilution pre': we added 100 ul ultra pure water to the sample before running it, dilutin factor here is 10x
+
+
+```{r Calculate Succiante}
+library(tidyr)
+# Plate 1 calculate CS
+
+plate1_slope_5x    = 62.2
+plate1_slope_10x   = 58.7
+plate1_slope_10x30 = 74.7 
+Plate_1_Succinate  <- Plate1.samples %>% 
+                        # dplyr::filter(Time_min %in% c(0,20,25,30)) %>% 
+                        dplyr::select(Temperature.Number, Tank.Number, Volume, Abs_570nm, About) %>% 
+                        dplyr::mutate(Unique_ID = 
+                                      paste0('Plate',1,'_',
+                                      'Tank',Tank.Number, '_',
+                                      'Temperature', Temperature.Number)) %>% # unique ID t0 group by
+                        dplyr::group_by(Temperature.Number, Tank.Number, Unique_ID, About) %>% 
+                        dplyr::summarise(meanAbs = mean(Abs_570nm)) %>% 
+                        pivot_wider(names_from = About, values_from = meanAbs) %>% 
+                        dplyr::rename("meanAbs_5xpre"     = "no dilution",
+                                      "meanAbs_10xpost"   = "5x dilution post",
+                                      "meanAbs_10xpost30" ="5x dilution post 30 mins") %>% 
+                        dplyr::mutate(meanAbs_5xpre_Calc      = (meanAbs_5xpre * 5) / plate1_slope_5x,
+                                      
+                                      meanAbs_10xpost_Calc    = (meanAbs_10xpost * 10) / plate1_slope_10x,
+                                      
+                                      meanAbs_10xpost30_Calc  = (meanAbs_10xpost30 * 10) / plate1_slope_10x30,
+                                      
+                                      Treatment = case_when(Tank.Number %in% c(1:7) ~ 'Ambient',
+                                                            Tank.Number %in% c(8:14) ~ 'Heated')) 
+
+Plate_1_Succinate_per.g.protein <- merge(Plate_1_Succinate, TotalProtein_final, 
+                                  by = c('Unique_ID','Temperature.Number', 'Tank.Number')) %>% 
+                                # TotalProtein_ug is the amount of proetin in 25 ul of homogenate 
+                                # correct for the volume in the Succiante sample, in all cases we used 20 ul of the homogenate
+                                # to measure Succinate                                
+                                dplyr::mutate(Succinate_per_ug_protein_5xpre = 
+                                                  meanAbs_5xpre_Calc / (TotalProtein_ug_mL*(20/1000)),
+                                              
+                                              Succinate_per_ug_protein_10xpost = 
+                                                  meanAbs_10xpost_Calc / (TotalProtein_ug_mL*(20/1000)),
+                                              
+                                              Succinate_per_ug_protein_10xpost30 = 
+                                                  meanAbs_10xpost30_Calc / (TotalProtein_ug_mL*(20/1000)),
+                                              
+                                              
+                                              ) %>% 
+                                # filter(!Cs_Activty_per_ug_protein < 0) %>% 
+                                dplyr::select(Temperature.Number,
+                                              Tank.Number,
+                                              Treatment,
+                                              TotalProtein_ug_mL,
+                                              Succinate_per_ug_protein_5xpre,
+                                              Succinate_per_ug_protein_10xpost,
+                                              Succinate_per_ug_protein_10xpost30
+                                              ) %>% 
+                                dplyr::group_by(Temperature.Number, Tank.Number, Treatment) %>% 
+                                dplyr::summarise(meanTotalProtein_ug_mL = mean(TotalProtein_ug_mL),
+                                                 meanSuccinate_per_ug_protein_5xpre = mean(Succinate_per_ug_protein_5xpre),
+                                                 meanSuccinate_per_ug_protein_10xpost = mean(Succinate_per_ug_protein_10xpost),
+                                                 meanSuccinate_per_ug_protein_10xpost30 = mean(Succinate_per_ug_protein_10xpost30)) 
+# Plate 2 Calculate CS 
+
+plate2_slope_10xpre   = 63.3
+Plate_2_Succinate  <- Plate2.samples %>% 
+                        # dplyr::filter(Time_min %in% c(0,20,25,30)) %>% 
+                        dplyr::select(Temperature.Number, Tank.Number, Volume, Abs_570nm, About) %>% 
+                        dplyr::mutate(Unique_ID = 
+                                      paste0('Plate',2,'_',
+                                      'Tank',Tank.Number, '_',
+                                      'Temperature', Temperature.Number)) %>% # unique ID t0 group by
+                        dplyr::group_by(Temperature.Number, Tank.Number, Unique_ID, About) %>% 
+                        dplyr::summarise(meanAbs = mean(Abs_570nm))  %>% 
+                        dplyr::mutate(meanAbs_10xpre_Calc      = (meanAbs * 10) / plate2_slope_10xpre,
+                                      Treatment = case_when(Tank.Number %in% c(1:7) ~ 'Ambient',
+                                                            Tank.Number %in% c(8:14) ~ 'Heated')) 
+
+
+Plate_2_Succinate_per.g.protein <- merge(Plate_2_Succinate, TotalProtein_final, 
+                                  by = c('Unique_ID','Temperature.Number', 'Tank.Number')) %>% 
+                                # TotalProtein_ug is the amount of proetin in 25 ul of homogenate 
+                                # correct for the volume in the Succiante sample, in all cases we used 20 ul of the homogenate
+                                # to measure Succinate                                
+                                dplyr::mutate(Succinate_per_ug_protein_10xpre = 
+                                                  meanAbs_10xpre_Calc / (TotalProtein_ug_mL*(20/1000))
+                                              ) %>% 
+                                # filter(!Cs_Activty_per_ug_protein < 0) %>% 
+                                dplyr::select(Temperature.Number,
+                                              Tank.Number,
+                                              Treatment,
+                                              TotalProtein_ug_mL,
+                                              Succinate_per_ug_protein_10xpre
+                                              ) %>% 
+                                dplyr::group_by(Temperature.Number, Tank.Number, Treatment) %>% 
+                                dplyr::summarise(meanTotalProtein_ug_mL = mean(TotalProtein_ug_mL),
+                                                 meanSuccinate_per_ug_protein_10xpre = mean(Succinate_per_ug_protein_10xpre)) 
+
+
+### master table 
+Master_Table <- plyr::rbind.fill(Plate_1_Succinate_per.g.protein, Plate_2_Succinate_per.g.protein) %>% 
+                  # dplyr::filter(!meanCs_Activity_ug_protein < 0) %>% 
+                  dplyr::mutate(Temperature = case_when(
+                    Temperature.Number == 1 & Treatment %in% 'Heated' ~ "22",
+                    Temperature.Number == 2 & Treatment %in% 'Heated' ~ "26",
+                    Temperature.Number == 3 & Treatment %in% 'Heated' ~ "30",
+                    Temperature.Number == 4 & Treatment %in% 'Heated' ~ "34",
+                    Temperature.Number == 5 & Treatment %in% 'Heated' ~ "36",
+                 
+                    Temperature.Number == 1 & Treatment %in% 'Ambient' ~ "22_t1",
+                    Temperature.Number == 2 & Treatment %in% 'Ambient' ~ "22_t2",
+                    Temperature.Number == 3 & Treatment %in% 'Ambient' ~ "22_t3",
+                    Temperature.Number == 4 & Treatment %in% 'Ambient' ~ "22_t4",
+                    Temperature.Number == 5 & Treatment %in% 'Ambient' ~ "22_t5",
+                  )) %>% 
+                  dplyr::rename(Timepoint = Temperature.Number)
+
+# write csv
+write.csv(Master_Table, file = "Output/Colorimetric_assays/Succinate/Calc_Master_Succinate.csv")
+
+
+
+```
+
+
+```{r plot data}
+# plot all data above 0
+Plot_MeanSE <- Master_Table %>% 
+                  dplyr::filter(!meanSuccinate_per_ug_protein_5xpre > 350) %>%
+                  # dplyr::filter(!meanSuccinate_per_ug_protein_10xpre > 600) %>%
+                  ggplot(aes(x = as.factor(Temperature), 
+                             y = meanSuccinate_per_ug_protein_5xpre,
+                             # y = meanSuccinate_per_ug_protein_10xpre,
+                             color=Treatment,
+                             group=Treatment)) +
+                         scale_colour_manual(breaks=c("Ambient", "Heated"), 
+                                                             values=c("forestgreen","orange")) +
+                         geom_point(aes(colour = Treatment), 
+                                        position = position_dodge2(width = 0.4)) + 
+                         stat_summary(fun.y="mean", size = 0.8, color = "black",
+                                      position = position_dodge2(width = 0.4)) +
+                         stat_summary(fun.min = function(x) mean(x) - sd(x)/sqrt(length(x)), 
+                                      fun.max = function(x) mean(x) + sd(x)/sqrt(length(x)),
+                                      geom = 'errorbar', width = 0.25, size = 1,
+                                      position = position_dodge2(width = 10.4)) +
+                         labs(title="uM Succinate", 
+                              x ="Temperature", 
+                              y = expression("Succinate"~(~uM^{-1}*~ug~protein^{-1}))) + #"CS activity per g protein") +
+                        # scale_x_discrete(labels=c("22", "26", "30" , "34", "36")) +
+                         # scale_y_continuous(expand = c(0, 0), limits = c(0, 0.00035), 
+                                            # breaks = seq(0, 0.00035, by = 0.00007)) +
+                         theme_classic() +
+                         theme(panel.grid.major = element_blank(),  
+                               panel.grid.minor = element_blank(), 
+                               axis.title =element_text(size=12),
+                               axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1),
+                               axis.text=element_text(size=10),
+                               plot.title = element_text(size=12),
+                               legend.position="none") + 
+                        facet_wrap(~Treatment, scales= "free_x")
+
+# plot all data above 0 - omit outliers and present only the heated treatment
+Plot_MeanSE_ambient <- Master_Table %>% 
+                  dplyr::filter(!(Treatment %in% 'Heated')) %>% 
+                  dplyr::filter(!meanSuccinate_per_ug_protein_5xpre > 350)  %>%
+                  ggplot(aes(x = as.factor(Temperature),
+                             y = meanSuccinate_per_ug_protein_5xpre,
+                             color=Treatment)) +
+                         scale_colour_manual(breaks=("Ambient"),
+                                             values=("forestgreen")) +
+                         geom_point(aes(colour = Treatment),
+                                        position = position_dodge2(width = 0.4)) +
+                         stat_summary(fun.y="mean", size = 0.8, color = "black",
+                                      position = position_dodge2(width = 0.4)) +
+                         stat_summary(fun.min = function(x) mean(x) - sd(x)/sqrt(length(x)),
+                                      fun.max = function(x) mean(x) + sd(x)/sqrt(length(x)),
+                                      geom = 'errorbar', width = 0.25, size = 1,
+                                      position = position_dodge2(width = 10.4)) +
+                         labs(title="uM Succinate", 
+                              x ="Temperature", 
+                              y = expression("Succinate"~(~uM^{-1}*~ug~protein^{-1}))) + #"CS activity per g protein") +
+                         theme_classic() +
+                         theme(panel.grid.major = element_blank(),
+                               panel.grid.minor = element_blank(),
+                               axis.title =element_text(size=12),
+                               axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1),
+                               axis.text=element_text(size=10),
+                               plot.title = element_text(size=12),
+                               legend.position="none")
+
+# Plot_MeanSE_ambient
+
+# plot all data above 0 - omit outliers and present only the heated treatment
+Plot_MeanSE_heated<- Master_Table %>% 
+                  dplyr::filter(!(Treatment %in% 'Ambient')) %>% 
+                  dplyr::filter(!meanSuccinate_per_ug_protein_5xpre > 350)  %>%
+                  ggplot(aes(x = as.factor(Temperature),
+                             y = meanSuccinate_per_ug_protein_5xpre,
+                             color=Treatment)) +
+                         scale_colour_manual(breaks=("Heated"),
+                                             values=("orange")) +
+                         geom_point(aes(colour = Treatment),
+                                        position = position_dodge2(width = 0.4)) +
+                         stat_summary(fun.y="mean", size = 0.8, color = "black",
+                                      position = position_dodge2(width = 0.4)) +
+                         stat_summary(fun.min = function(x) mean(x) - sd(x)/sqrt(length(x)),
+                                      fun.max = function(x) mean(x) + sd(x)/sqrt(length(x)),
+                                      geom = 'errorbar', width = 0.25, size = 1,
+                                      position = position_dodge2(width = 10.4)) +
+                         labs(title="uM Succinate", 
+                              x ="Temperature", 
+                              y = expression("Succinate"~(~uM^{-1}*~ug~protein^{-1}))) + #"CS activity per g protein") +
+                         theme_classic() +
+                         theme(panel.grid.major = element_blank(),
+                               panel.grid.minor = element_blank(),
+                               axis.title =element_text(size=12),
+                               axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1),
+                               axis.text=element_text(size=10),
+                               plot.title = element_text(size=12),
+                               legend.position="none")
+
+ggarrange(Plot_MeanSE_ambient, Plot_MeanSE_heated)
+
+# output 
+pdf(paste("Output/Colorimetric_assays/Succinate/Succinate_AmbinetvHeated.pdf", sep =''), 
+    width=10, 
+    height=4)
+ggarrange(Plot_MeanSE_ambient, Plot_MeanSE_heated)
+dev.off()
+
+
+# pdf(paste("Output/Colorimetric_assays/Citrate_Synthase/Citrate_Synthase_Heated.pdf", sep =''), 
+#     width=5, 
+#     height=4)
+# print(Plot_MeanSE_heated)
+# dev.off()
+# 
+# pdf(paste("Output/Colorimetric_assays/Citrate_Synthase/Citrate_Synthase_Ambient.pdf", sep =''), 
+#     width=5, 
+#     height=4)
+# print(Plot_MeanSE_ambient)
+# dev.off()
+
+```
+
+
+# STATISTICS
+
+
+```{r run stats}
+library(rstatix)
+Master <- rbind(Plate_1_CS_per.g.protein, Plate_2_CS_per.g.protein) %>% 
+                  dplyr::filter(!(meanCs_Activty < 0  | meanCs_Activty > 0.0006)) %>%
+                  dplyr::mutate(Temperature = case_when(
+                    Temperature.Number == 1 ~ "22",
+                    Temperature.Number == 2 ~ "26",
+                    Temperature.Number == 3 ~ "30",
+                    Temperature.Number == 4 ~ "34",
+                    Temperature.Number == 5 ~ "38",
+                  ))
+
+
+Master %>% 
+            group_by(Temperature) %>%
+            anova_test(dv = meanCs_Activty, between = Treatment) %>%
+            get_anova_table() %>%
+            adjust_pvalue(method = "bonferroni")
+  
+```
+
