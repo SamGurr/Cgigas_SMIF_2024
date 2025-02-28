@@ -515,7 +515,7 @@ Plate2_Catalase_curve <- ggplot(Plate2_standards_meanSE, aes(x = catalase_UmL, y
                                   geom_point() +
                                   geom_line(data = data.frame(catalase_UmL = newdata_plate2$catalase_UmL, response = predictions_plate2), 
                                             aes(x = catalase_UmL, y = response), color = "blue", size = 1) +
-                                  labs(x = "catalase_UmL", y = "meanAbs", title = "Catalase curve Plate 1") +
+                                  labs(x = "catalase_UmL", y = "meanAbs", title = "Catalase curve Plate 2") +
                                   annotate("text", x = Inf, y = Inf, label = equation_plate2, hjust = 1, vjust = 1) +
                                   theme_minimal()
 
