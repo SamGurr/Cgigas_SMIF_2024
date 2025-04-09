@@ -30,8 +30,6 @@ library(dplyr)
 library(lmtest) # to receive p value from betareg model
 # library(FSA) # for the Dun test post hoc for SRH non-parametric 2 way anova]
 library(emmeans)
-library(ggplot2)
-library(dplyr)
 library(tidyverse)
 library(car)
 library(lmerTest)
@@ -428,7 +426,7 @@ write.csv(TotalProtein_final, file = "Output/catalase/total_protein.csv")
 ```
 
 
-## CATALSE 
+## CATALASE 
 
 * Generated curve with standards
   - calculate the mean blank standard as 0 catalase_UmL or Standards 'S7'
@@ -437,7 +435,7 @@ write.csv(TotalProtein_final, file = "Output/catalase/total_protein.csv")
   
 * Calcaulate the sample U/mL 
   - correct absorbance for blank 
-  - use quadrafic equation from stnadrd curve to calaculate for y
+  - use quadratic equation from standard curve to calculate U/mL catalase
 
 
 * STEP 1: Calculate blank absorbance
@@ -457,13 +455,15 @@ Plate2.blank.mean    <- mean(Plate2.blanks$Cat_Absorbance_560nm) # 1.0943
 
 * STEP 2: Generate standard curve (correct for blank background abs first!)
 
-  - plate1: y = 1.15 + (−0.10 − 1.15) / (1 + (x / 1.16)^0.75)
-  - plate2: y = 1.33 + (−0.03 − 1.33) / (1 + (x / 1.09)^0.86)
+  - plate1: y = 0.82 + (−0.34 − 0.82) / (1 + (x / 24,77)^0.01); x = Abs at 500 um, y = catalase U mL
+  - plate2: y = 1.33 + (−0.03 − 1.33) / (1 + (x / 1.09)^0.86); x = Abs at 500 um, y = catalase U mL
+  
+  * **Important** - 25 ul of sample was measured without dilution for catalase. This is critical to correct to total protein
+  as our protocol for total protein also used 25 ul per sample - so it will be 1:1 to correct for catalase per total protein
   
 ```{r generate standard curve}
 library(drc) # install.packages('drc')
-## Objectve to subtract the blank from all standards and samples. 
-
+## Objectve to subtract the blank from all standards and samples. and build standard curve with equation
 
 # Plate 1
 Plate1_standards_meanSE <- catalase_plate1.standards %>% 
@@ -473,23 +473,25 @@ Plate1_standards_meanSE <- catalase_plate1.standards %>%
                                     dplyr::summarise(meanAbs = mean(Absorbance_560nm_raw),
                                                      sdAbs   = sd(Absorbance_560nm_raw),
                                                      n = n())
-Plate1_standards_model <- drm(meanAbs ~ catalase_UmL, data = Plate1_standards_meanSE, fct = LL.4()) # generate four parametr logistic model
-newdata_plate1         <- data.frame(catalase_UmL = seq(min(Plate1_standards_meanSE$catalase_UmL), max(Plate1_standards_meanSE$catalase_UmL), length.out = 100))
+Plate1_standards_model <- drm(catalase_UmL ~ meanAbs, data = Plate1_standards_meanSE, fct = LL.4()) # generate four parametr logistic model
+newdata_plate1         <- data.frame(meanAbs = seq(min(Plate1_standards_meanSE$meanAbs), 
+                                                   max(Plate1_standards_meanSE$meanAbs), length.out = 100))
 predictions_plate1     <- predict(Plate1_standards_model, newdata = newdata_plate1)
 params_plate1          <- coef(Plate1_standards_model) # # Extract parameters
 equation_plate1        <- sprintf("y = %.2f + (%.2f - %.2f) / (1 + (x / %.2f)^%.2f)",
                                   params_plate1[1], params_plate1[2], params_plate1[1], params_plate1[3], params_plate1[4])
 
 
-Plate1_Catalase_curve <- ggplot(Plate1_standards_meanSE, aes(x = catalase_UmL, y = meanAbs)) + # # Plot the data and fitted curve
+Plate1_Catalase_curve <- ggplot(Plate1_standards_meanSE, aes(x = meanAbs, y = catalase_UmL)) + # # Plot the data and fitted curve
                                   geom_point() +
-                                  geom_line(data = data.frame(catalase_UmL = newdata_plate1$catalase_UmL, response = predictions_plate1), 
-                                            aes(x = catalase_UmL, y = response), color = "blue", size = 1) +
-                                  labs(x = "catalase_UmL", y = "meanAbs", title = "Catalase curve Plate 1") +
+                                  geom_line(data = data.frame(meanAbs = 
+                                                                newdata_plate1$meanAbs, response = predictions_plate1), 
+                                            aes(x = meanAbs, y = response), color = "blue", size = 1) +
+                                  labs(x = "meanAbs", y = "catalase_UmL", title = "Catalase curve Plate 1") +
                                   annotate("text", x = Inf, y = Inf, label = equation_plate1, hjust = 1, vjust = 1) +
                                   theme_minimal()
 
-# y = 0.82 + (−0.34 − 0.82) / (1 + (x / 24.77)^0.01)
+# y = 0.82 + (−0.34 − 0.82) / (1 + (x / 24,77)^0.01)
 
 
 
@@ -503,19 +505,20 @@ Plate2_standards_meanSE <- catalase_plate2.standards %>%
                                     dplyr::summarise(meanAbs = mean(Absorbance_560nm_raw),
                                                      sdAbs   = sd(Absorbance_560nm_raw),
                                                      n = n())
-Plate2_standards_model <- drm(meanAbs ~ catalase_UmL, data = Plate2_standards_meanSE, fct = LL.4()) # generate four parametr logistic model
-newdata_plate2         <- data.frame(catalase_UmL = seq(min(Plate2_standards_meanSE$catalase_UmL), max(Plate2_standards_meanSE$catalase_UmL), length.out = 100))
+Plate2_standards_model <- drm(catalase_UmL ~ meanAbs, data = Plate2_standards_meanSE, fct = LL.4()) # generate four parametr logistic model
+newdata_plate2         <- data.frame(meanAbs = seq(min(Plate2_standards_meanSE$meanAbs), max(Plate2_standards_meanSE$meanAbs), length.out = 100))
 predictions_plate2     <- predict(Plate2_standards_model, newdata = newdata_plate2)
 params_plate2          <- coef(Plate2_standards_model) # # Extract parameters
 equation_plate2        <- sprintf("y = %.2f + (%.2f - %.2f) / (1 + (x / %.2f)^%.2f)",
                                   params_plate2[1], params_plate2[2], params_plate2[1], params_plate2[3], params_plate2[4])
 
 
-Plate2_Catalase_curve <- ggplot(Plate2_standards_meanSE, aes(x = catalase_UmL, y = meanAbs)) + # # Plot the data and fitted curve
+Plate2_Catalase_curve <- ggplot(Plate2_standards_meanSE, aes(x = meanAbs, y = catalase_UmL)) + # # Plot the data and fitted curve
                                   geom_point() +
-                                  geom_line(data = data.frame(catalase_UmL = newdata_plate2$catalase_UmL, response = predictions_plate2), 
-                                            aes(x = catalase_UmL, y = response), color = "blue", size = 1) +
-                                  labs(x = "catalase_UmL", y = "meanAbs", title = "Catalase curve Plate 2") +
+                                  geom_line(data = data.frame(meanAbs = 
+                                                                newdata_plate1$meanAbs, response = predictions_plate1), 
+                                            aes(x = meanAbs, y = response), color = "blue", size = 1) +
+                                  labs(x = "meanAbs", y = "catalase_UmL", title = "Catalase curve Plate 2") +
                                   annotate("text", x = Inf, y = Inf, label = equation_plate2, hjust = 1, vjust = 1) +
                                   theme_minimal()
 
@@ -531,293 +534,110 @@ dev.off()
 ```
 
 
-## Calculate succinate 
-
-* Importantly here we have different dilution factors fr different runs (note: standards were NOT diluted!, remained the same for all runs)
+## Calculate catalase
 
 
-Plate 1: 
+* Steps: 
 
-* calc meanAbs_5xpre from 'no dilution': 20 ul sample added to 80 ul of reagent mix (total / sample = 100 / 20). The dilution factor here is x5 dilution
-
-* calc meanAbs_10xpost from '5x dilution post': we added 100 ul ultra pure water to the sample wells and reran, now 200/20 a 10x dilution total
-
-* calc meanAbs_10xpost30 from '5x dilution post 30 mins': same as above but incubated for 30 minutes and ran again as a sanity check
-
-
-Plate 2: 
-
-* calc meanAbs_10xpre from '5x dilution pre': we added 100 ul ultra pure water to the sample before running it, dilutin factor here is 10x
-
-
-```{r Calculate Succiante}
-library(tidyr)
-# Plate 1 calculate CS
-
-
-catalase_plate1.samples %>% mutate(catalase_UmL = 1.16 * (-1.25 / (0.1104 - 1.15) - 1)^(4/3) )
-
-
-```
-0.82 + (−0.34 − 0.82) / (1 + (x / 24.77)^0.01)
-
-Plate_1_Succinate  <- Plate1.samples %>% 
-                        # dplyr::filter(Time_min %in% c(0,20,25,30)) %>% 
-                        dplyr::select(Temperature.Number, Tank.Number, Volume, Abs_570nm, About) %>% 
-                        dplyr::mutate(Unique_ID = 
-                                      paste0('Plate',1,'_',
-                                      'Tank',Tank.Number, '_',
-                                      'Temperature', Temperature.Number)) %>% # unique ID t0 group by
-                        dplyr::group_by(Temperature.Number, Tank.Number, Unique_ID, About) %>% 
-                        dplyr::summarise(meanAbs = mean(Abs_570nm)) %>% 
-                        pivot_wider(names_from = About, values_from = meanAbs) %>% 
-                        dplyr::rename("meanAbs_5xpre"     = "no dilution",
-                                      "meanAbs_10xpost"   = "5x dilution post",
-                                      "meanAbs_10xpost30" ="5x dilution post 30 mins") %>% 
-                        dplyr::mutate(meanAbs_5xpre_Calc      = (meanAbs_5xpre * 5) / plate1_slope_5x,
-                                      
-                                      meanAbs_10xpost_Calc    = (meanAbs_10xpost * 10) / plate1_slope_10x,
-                                      
-                                      meanAbs_10xpost30_Calc  = (meanAbs_10xpost30 * 10) / plate1_slope_10x30,
-                                      
-                                      Treatment = case_when(Tank.Number %in% c(1:7) ~ 'Ambient',
-                                                            Tank.Number %in% c(8:14) ~ 'Heated')) 
-
-Plate_1_Succinate_per.g.protein <- merge(Plate_1_Succinate, TotalProtein_final, 
-                                  by = c('Unique_ID','Temperature.Number', 'Tank.Number')) %>% 
-                                # TotalProtein_ug is the amount of proetin in 25 ul of homogenate 
-                                # correct for the volume in the Succiante sample, in all cases we used 20 ul of the homogenate
-                                # to measure Succinate                                
-                                dplyr::mutate(Succinate_per_ug_protein_5xpre = 
-                                                  meanAbs_5xpre_Calc / (TotalProtein_ug_mL*(20/1000)),
-                                              
-                                              Succinate_per_ug_protein_10xpost = 
-                                                  meanAbs_10xpost_Calc / (TotalProtein_ug_mL*(20/1000)),
-                                              
-                                              Succinate_per_ug_protein_10xpost30 = 
-                                                  meanAbs_10xpost30_Calc / (TotalProtein_ug_mL*(20/1000)),
-                                              
-                                              
-                                              ) %>% 
-                                # filter(!Cs_Activty_per_ug_protein < 0) %>% 
-                                dplyr::select(Temperature.Number,
-                                              Tank.Number,
-                                              Treatment,
-                                              TotalProtein_ug_mL,
-                                              Succinate_per_ug_protein_5xpre,
-                                              Succinate_per_ug_protein_10xpost,
-                                              Succinate_per_ug_protein_10xpost30
-                                              ) %>% 
-                                dplyr::group_by(Temperature.Number, Tank.Number, Treatment) %>% 
-                                dplyr::summarise(meanTotalProtein_ug_mL = mean(TotalProtein_ug_mL),
-                                                 meanSuccinate_per_ug_protein_5xpre = mean(Succinate_per_ug_protein_5xpre),
-                                                 meanSuccinate_per_ug_protein_10xpost = mean(Succinate_per_ug_protein_10xpost),
-                                                 meanSuccinate_per_ug_protein_10xpost30 = mean(Succinate_per_ug_protein_10xpost30)) 
-# Plate 2 Calculate CS 
-
-plate2_slope_10xpre   = 63.3
-Plate_2_Succinate  <- Plate2.samples %>% 
-                        # dplyr::filter(Time_min %in% c(0,20,25,30)) %>% 
-                        dplyr::select(Temperature.Number, Tank.Number, Volume, Abs_570nm, About) %>% 
-                        dplyr::mutate(Unique_ID = 
-                                      paste0('Plate',2,'_',
-                                      'Tank',Tank.Number, '_',
-                                      'Temperature', Temperature.Number)) %>% # unique ID t0 group by
-                        dplyr::group_by(Temperature.Number, Tank.Number, Unique_ID, About) %>% 
-                        dplyr::summarise(meanAbs = mean(Abs_570nm))  %>% 
-                        dplyr::mutate(meanAbs_10xpre_Calc      = (meanAbs * 10) / plate2_slope_10xpre,
-                                      Treatment = case_when(Tank.Number %in% c(1:7) ~ 'Ambient',
-                                                            Tank.Number %in% c(8:14) ~ 'Heated')) 
-
-
-Plate_2_Succinate_per.g.protein <- merge(Plate_2_Succinate, TotalProtein_final, 
-                                  by = c('Unique_ID','Temperature.Number', 'Tank.Number')) %>% 
-                                # TotalProtein_ug is the amount of proetin in 25 ul of homogenate 
-                                # correct for the volume in the Succiante sample, in all cases we used 20 ul of the homogenate
-                                # to measure Succinate                                
-                                dplyr::mutate(Succinate_per_ug_protein_10xpre = 
-                                                  meanAbs_10xpre_Calc / (TotalProtein_ug_mL*(20/1000))
-                                              ) %>% 
-                                # filter(!Cs_Activty_per_ug_protein < 0) %>% 
-                                dplyr::select(Temperature.Number,
-                                              Tank.Number,
-                                              Treatment,
-                                              TotalProtein_ug_mL,
-                                              Succinate_per_ug_protein_10xpre
-                                              ) %>% 
-                                dplyr::group_by(Temperature.Number, Tank.Number, Treatment) %>% 
-                                dplyr::summarise(meanTotalProtein_ug_mL = mean(TotalProtein_ug_mL),
-                                                 meanSuccinate_per_ug_protein_10xpre = mean(Succinate_per_ug_protein_10xpre)) 
-
-
-### master table 
-Master_Table <- plyr::rbind.fill(Plate_1_Succinate_per.g.protein, Plate_2_Succinate_per.g.protein) %>% 
-                  # dplyr::filter(!meanCs_Activity_ug_protein < 0) %>% 
-                  dplyr::mutate(Temperature = case_when(
-                    Temperature.Number == 1 & Treatment %in% 'Heated' ~ "22",
-                    Temperature.Number == 2 & Treatment %in% 'Heated' ~ "26",
-                    Temperature.Number == 3 & Treatment %in% 'Heated' ~ "30",
-                    Temperature.Number == 4 & Treatment %in% 'Heated' ~ "34",
-                    Temperature.Number == 5 & Treatment %in% 'Heated' ~ "36",
-                 
-                    Temperature.Number == 1 & Treatment %in% 'Ambient' ~ "22_t1",
-                    Temperature.Number == 2 & Treatment %in% 'Ambient' ~ "22_t2",
-                    Temperature.Number == 3 & Treatment %in% 'Ambient' ~ "22_t3",
-                    Temperature.Number == 4 & Treatment %in% 'Ambient' ~ "22_t4",
-                    Temperature.Number == 5 & Treatment %in% 'Ambient' ~ "22_t5",
-                  )) %>% 
-                  dplyr::rename(Timepoint = Temperature.Number)
-
-# write csv
-write.csv(Master_Table, file = "Output/Colorimetric_assays/Succinate/Calc_Master_Succinate.csv")
-
-
-
-```
-
-
-```{r plot data}
-# plot all data above 0
-Plot_MeanSE <- Master_Table %>% 
-                  dplyr::filter(!meanSuccinate_per_ug_protein_5xpre > 350) %>%
-                  # dplyr::filter(!meanSuccinate_per_ug_protein_10xpre > 600) %>%
-                  ggplot(aes(x = as.factor(Temperature), 
-                             y = meanSuccinate_per_ug_protein_5xpre,
-                             # y = meanSuccinate_per_ug_protein_10xpre,
-                             color=Treatment,
-                             group=Treatment)) +
-                         scale_colour_manual(breaks=c("Ambient", "Heated"), 
-                                                             values=c("forestgreen","orange")) +
-                         geom_point(aes(colour = Treatment), 
-                                        position = position_dodge2(width = 0.4)) + 
-                         stat_summary(fun.y="mean", size = 0.8, color = "black",
-                                      position = position_dodge2(width = 0.4)) +
-                         stat_summary(fun.min = function(x) mean(x) - sd(x)/sqrt(length(x)), 
-                                      fun.max = function(x) mean(x) + sd(x)/sqrt(length(x)),
-                                      geom = 'errorbar', width = 0.25, size = 1,
-                                      position = position_dodge2(width = 10.4)) +
-                         labs(title="uM Succinate", 
-                              x ="Temperature", 
-                              y = expression("Succinate"~(~uM^{-1}*~ug~protein^{-1}))) + #"CS activity per g protein") +
-                        # scale_x_discrete(labels=c("22", "26", "30" , "34", "36")) +
-                         # scale_y_continuous(expand = c(0, 0), limits = c(0, 0.00035), 
-                                            # breaks = seq(0, 0.00035, by = 0.00007)) +
-                         theme_classic() +
-                         theme(panel.grid.major = element_blank(),  
-                               panel.grid.minor = element_blank(), 
-                               axis.title =element_text(size=12),
-                               axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1),
-                               axis.text=element_text(size=10),
-                               plot.title = element_text(size=12),
-                               legend.position="none") + 
-                        facet_wrap(~Treatment, scales= "free_x")
-
-# plot all data above 0 - omit outliers and present only the heated treatment
-Plot_MeanSE_ambient <- Master_Table %>% 
-                  dplyr::filter(!(Treatment %in% 'Heated')) %>% 
-                  dplyr::filter(!meanSuccinate_per_ug_protein_5xpre > 350)  %>%
-                  ggplot(aes(x = as.factor(Temperature),
-                             y = meanSuccinate_per_ug_protein_5xpre,
-                             color=Treatment)) +
-                         scale_colour_manual(breaks=("Ambient"),
-                                             values=("forestgreen")) +
-                         geom_point(aes(colour = Treatment),
-                                        position = position_dodge2(width = 0.4)) +
-                         stat_summary(fun.y="mean", size = 0.8, color = "black",
-                                      position = position_dodge2(width = 0.4)) +
-                         stat_summary(fun.min = function(x) mean(x) - sd(x)/sqrt(length(x)),
-                                      fun.max = function(x) mean(x) + sd(x)/sqrt(length(x)),
-                                      geom = 'errorbar', width = 0.25, size = 1,
-                                      position = position_dodge2(width = 10.4)) +
-                         labs(title="uM Succinate", 
-                              x ="Temperature", 
-                              y = expression("Succinate"~(~uM^{-1}*~ug~protein^{-1}))) + #"CS activity per g protein") +
-                         theme_classic() +
-                         theme(panel.grid.major = element_blank(),
-                               panel.grid.minor = element_blank(),
-                               axis.title =element_text(size=12),
-                               axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1),
-                               axis.text=element_text(size=10),
-                               plot.title = element_text(size=12),
-                               legend.position="none")
-
-# Plot_MeanSE_ambient
-
-# plot all data above 0 - omit outliers and present only the heated treatment
-Plot_MeanSE_heated<- Master_Table %>% 
-                  dplyr::filter(!(Treatment %in% 'Ambient')) %>% 
-                  dplyr::filter(!meanSuccinate_per_ug_protein_5xpre > 350)  %>%
-                  ggplot(aes(x = as.factor(Temperature),
-                             y = meanSuccinate_per_ug_protein_5xpre,
-                             color=Treatment)) +
-                         scale_colour_manual(breaks=("Heated"),
-                                             values=("orange")) +
-                         geom_point(aes(colour = Treatment),
-                                        position = position_dodge2(width = 0.4)) +
-                         stat_summary(fun.y="mean", size = 0.8, color = "black",
-                                      position = position_dodge2(width = 0.4)) +
-                         stat_summary(fun.min = function(x) mean(x) - sd(x)/sqrt(length(x)),
-                                      fun.max = function(x) mean(x) + sd(x)/sqrt(length(x)),
-                                      geom = 'errorbar', width = 0.25, size = 1,
-                                      position = position_dodge2(width = 10.4)) +
-                         labs(title="uM Succinate", 
-                              x ="Temperature", 
-                              y = expression("Succinate"~(~uM^{-1}*~ug~protein^{-1}))) + #"CS activity per g protein") +
-                         theme_classic() +
-                         theme(panel.grid.major = element_blank(),
-                               panel.grid.minor = element_blank(),
-                               axis.title =element_text(size=12),
-                               axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1),
-                               axis.text=element_text(size=10),
-                               plot.title = element_text(size=12),
-                               legend.position="none")
-
-ggarrange(Plot_MeanSE_ambient, Plot_MeanSE_heated)
-
-# output 
-pdf(paste("Output/Colorimetric_assays/Succinate/Succinate_AmbinetvHeated.pdf", sep =''), 
-    width=10, 
-    height=4)
-ggarrange(Plot_MeanSE_ambient, Plot_MeanSE_heated)
-dev.off()
-
-
-# pdf(paste("Output/Colorimetric_assays/Citrate_Synthase/Citrate_Synthase_Heated.pdf", sep =''), 
-#     width=5, 
-#     height=4)
-# print(Plot_MeanSE_heated)
-# dev.off()
-# 
-# pdf(paste("Output/Colorimetric_assays/Citrate_Synthase/Citrate_Synthase_Ambient.pdf", sep =''), 
-#     width=5, 
-#     height=4)
-# print(Plot_MeanSE_ambient)
-# dev.off()
-
-```
-
-
-# STATISTICS
-
-
-```{r run stats}
-library(rstatix)
-Master <- rbind(Plate_1_CS_per.g.protein, Plate_2_CS_per.g.protein) %>% 
-                  dplyr::filter(!(meanCs_Activty < 0  | meanCs_Activty > 0.0006)) %>%
-                  dplyr::mutate(Temperature = case_when(
-                    Temperature.Number == 1 ~ "22",
-                    Temperature.Number == 2 ~ "26",
-                    Temperature.Number == 3 ~ "30",
-                    Temperature.Number == 4 ~ "34",
-                    Temperature.Number == 5 ~ "38",
-                  ))
-
-
-Master %>% 
-            group_by(Temperature) %>%
-            anova_test(dv = meanCs_Activty, between = Treatment) %>%
-            get_anova_table() %>%
-            adjust_pvalue(method = "bonferroni")
+  - assemble the averages for total protein (duplicates) as 'TotalProtein_final_MeanSE'
   
+  - merge means total protein with the catalase absorbance data
+  
+    - quick sanity check to ensure the merge was successful
+    
+  - calculate catalase using the standard equations from the chunk above
+
+```{r average total protein by sample id}
+library(tidyr)
+
+# first prepare total protein to merge with the catalase samples
+# we want ot take a mean for the total protein value since we measured in duplicate
+# so this below, has 59 unique Ids, this is correct
+TotalProtein_final_MeanSE <- TotalProtein_final %>% 
+                                 dplyr::select(Plate, Sample_ID, TotalProtein_ug) %>% 
+                                 Rmisc::summarySE(measurevar = 'TotalProtein_ug', groupvars = 'Sample_ID') %>% 
+                                 dplyr::select(Sample_ID, TotalProtein_ug)
+nrow(TotalProtein_final_MeanSE) # 58 unique IDs , took the mean for total protein between replicates!
+
 ```
 
+```{r merge total protein wit caltalase samples}
+# now bind together all the catalase samples
+catalase_all <- rbind(catalase_plate1.samples, catalase_plate2.samples)
+nrow(catalase_all) # 120
+length(unique(catalase_all$Sample_ID)) # 60 unique sample ids, correct good to go
+
+# merge with total protein
+catalase_all_protein <- merge(catalase_all, # merge calatase all
+                              TotalProtein_final_MeanSE, # with three columns of total protein final
+                              by = "Sample_ID") # by these ccommon columns
+nrow(catalase_all_protein) # 116
+length(unique(catalase_all_protein$Sample_ID)) # 58, which samples did we lose?
+
+```
+
+```{r calculate catalase}
+
+Catalase_Uml_ngprotein_final <- catalase_all_protein %>% # row bind, merge both together
+                                          dplyr::mutate(
+                                            Catalase_UmL = # new column
+                                              case_when( # dependencies of the new column  when...
+                                                Plate %in% 1 ~ (0.82 + (-0.34 - 0.82) / (1 + (Cat_Absorbance_560nm / 24.77)^0.01)), # column plate is 1, EQ, 
+                                                Plate %in% 2 ~ (1.66 + (-0.22 - 1.66) / (1 + (Cat_Absorbance_560nm / 5.63)^0.20)) # column plate is 2, EQ, 
+                                              ),
+                                            Catalase_UmL_ng_protein = 
+                                              Catalase_UmL / (TotalProtein_ug /1000),
+                                            Treatment = 
+                                              case_when(
+                                                grepl("BL", Sample_ID) ~ "Baseline", 
+                                                grepl("A1|A2|A3|B1|B2|B3", Sample_ID) ~ "Control",
+                                                grepl("A4|A5|A6|B4|B5|B6", Sample_ID) ~ "OA",
+                                                grepl("C1|C2|C3|D1|D2|D3", Sample_ID) ~ "HW"),
+                                            Time = 
+                                              case_when(
+                                                grepl("BL", Sample_ID) ~ "Baseline", 
+                                                grepl("T1", Sample_ID) ~ "1",
+                                                grepl("T2", Sample_ID) ~ "2",
+                                                grepl("T3", Sample_ID) ~ "3")
+                                              ) %>% 
+                                           dplyr::select(Sample_ID, Treatment, Time, Catalase_UmL_ng_protein)
+                            
+Catalase_Uml_ngprotein_final_MeanSE <- Catalase_Uml_ngprotein_final %>% 
+                                 Rmisc::summarySE(measurevar = 'Catalase_UmL_ng_protein', groupvars = c('Sample_ID', 'Treatment' ,'Time')) 
+
+
+
+pd <- position_dodge2(width = 0.2)
+
+Catalase_Uml_ngprotein_final_MeanSE %>% 
+  
+  group_by(Treatment, Time) %>% 
+  
+   dplyr::summarise( # summarise to aquire the mean and SE for plotting
+    Catalase_mean = mean(Catalase_UmL_ng_protein), # mean
+    Catalase_sd = sd(Catalase_UmL_ng_protein), # sd
+    n = n(), # count
+    Catalase_se = Catalase_sd / sqrt(n)) %>% # SE
+  
+  # plot it
+  ggplot(aes(x=Time, y=Catalase_mean, group=Treatment)) + 
+    geom_line(aes(group = factor(Treatment)), size = 0.5, position=position_dodge(.4)) +  # connect a line between variables
+    # scale_linetype_manual(values=c("solid", "dashed", "dotted")) +
+    geom_point(aes(shape=Treatment, fill=Treatment), size = 4.5,position=position_dodge(.4)) + 
+    # scale_shape_manual(values=c(21, 22, 24)) + # filled circle, filled triangle, and X 
+    # scale_fill_manual(values=c("#009E73","#E69F00", "#CC79A7")) + # fill cicle white, triangle white, and jsut black for the X
+    geom_errorbar(aes(ymin=(Catalase_mean)-(Catalase_se), 
+                      ymax=(Catalase_mean)+(Catalase_se)), 
+                  width=0,position=position_dodge(.4)) + # width dtermines the length of the end ticks
+    # geom_jitter() +
+    theme_classic() +
+    theme(panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank()) +#,
+          # legend.position = "none") + 
+    ggtitle("Catalase") +
+    labs(y= "Catalase_UmL_ng_protein", x = "Time")
+
+
+ 
+ 
+```
