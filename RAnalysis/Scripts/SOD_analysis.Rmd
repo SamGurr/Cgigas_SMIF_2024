@@ -1,0 +1,718 @@
+---
+title: "SOD_analysis.Rmd"
+author: "Sam Gurr"
+date: "2024-10-31"
+output: html_document
+---
+
+### SET UP
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# SET WORKING DIRECTORY 
+# knitr::opts_knit$set(root.dir = "C:/Users/katherine.mcfarland/Documents/GitHub/EAD-ASEB-Cvirginica_Thermal_Performance/larvae") # Katie's
+knitr::opts_knit$set(root.dir = "C:/Users/samjg/Documents/Github_repositories/Cgigas_SMIF_2024/RAnalysis") # Sam's
+#knitr::opts_knit$set(root.dir = "C:/Users/samuel.gurr/Documents/Github_repositories/EAD-ASEB-Cvirginica_Thermal_Performance/RAnalysis") # Sam's work
+
+```
+
+
+## Load packages 
+
+* use install.packges('pacakge name') if you do not have these downloaded
+```{r setup, include=TRUE}
+
+library(ggpubr)
+library(ggplot2)
+library(dplyr)
+library(lmtest) # to receive p value from betareg model
+# library(FSA) # for the Dun test post hoc for SRH non-parametric 2 way anova]
+library(emmeans)
+library(tidyverse)
+library(car)
+library(lmerTest)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(nlme)
+library(rcompanion) # to run the Schrier -Ray-Hare non parametric 2 way 
+library(ggpmisc) # stat_poly for inserting equation and R2 for ggplot line 
+```
+
+
+
+
+```{r load experiment metadata and edit}
+
+# objective to relate unique smaple IDs to treatment(s)
+# the tric being to change the tube id in this raw format to match that in the plate metadata to merge later.. dont worry its easy!
+exp.metadata <- read.csv('Data/experiment_metadata/SMIF_Sample_Info_SG_ParallelAnalyses.csv', sep = ",", header=T) %>% 
+                      select(c('Set', 'Tube.ID', 'Assay..SOD.CAT.')) %>%  # call target columns 
+                      filter(Assay..SOD.CAT. %in% 'SOD') %>%  # redundant sample ids for each assay, arbitrarily choose SOD to get unique IDs
+                      mutate(Time = gsub("_.*", "", Tube.ID), # make column Time by calling everying before the first _
+                             ID   = gsub("_", "", gsub("_S_B$", "", Tube.ID)),
+                             Treatment = case_when(
+                                                  grepl("Control", Set) ~ "control",
+                                                  grepl("OA", Set) ~ "OA",
+                                                  grepl("HW", Set) ~ "hypoxia",
+                                                  TRUE ~ "baseline"
+                             )) %>% 
+                      select(ID, Time, Treatment)
+
+
+```
+## Function to load spec files
+
+-   At your service, from 'spec to table' ...I'm so funny
+
+```{r Spec_to_table}
+
+Spec_to_table <- function(datapath, platenumber, daterecorded) {
+  
+# import the data in raw text form exported from the spectrophotometer
+        rawtextfile <- read.delim(datapath,
+                              header = F,
+                              skip=3,
+                              fileEncoding="latin1")
+  
+
+        rawmatrix   <- as.matrix(rawtextfile[c(1:8),c(3:14)])
+        colnames(rawmatrix) = c("1","2","3","4","5","6","7","8","9","10","11","12")
+        rownames(rawmatrix) = c("A","B","C","D","E","F","G","H")
+        
+        raw_table <- as.data.frame.table(rawmatrix, responseName = "value") %>% 
+                                    dplyr::rename(well_row=Var1, well_column=Var2, absorbance_nm=value) %>% 
+                                    dplyr::mutate(well=paste0(well_row,well_column),
+                                                  Run_date =daterecorded,
+                                                  Plate=platenumber) %>% 
+                                    dplyr::select(-c(well_row,well_column))
+        # reorder the columns because I prefer it this way..
+        
+        raw_table_ordered <- raw_table[,c(3,4,2,1)]
+}
+
+
+```
+
+-   Use the spec_to_table to import raw spec txt files and compile to a table, yes that is what it does
+
+```{r load Catalase raw data and merge}
+
+# plate 1 
+SOD_plate1 <- Spec_to_table('Data/raw_data/superoxide_dismutase/20250226_sod_plate1.txt', 1, 20250226) %>%  
+                                  dplyr::rename(SOD_Absorbance_450nm=absorbance_nm) 
+# plate 2 
+SOD_plate2 <- Spec_to_table('Data/raw_data/superoxide_dismutase/20250226_sod_plate2.txt', 2, 20250226) %>%  
+                                  dplyr::rename(SOD_Absorbance_450nm=absorbance_nm) 
+
+# master 
+SOD_raw <- rbind(sod_plate1, sod_plate2)
+
+```
+
+```{r load Total protein correction data for catalase}
+
+# plate 1 
+totalprotein_plate1 <- Spec_to_table('Data/raw_data/superoxide_dismutase/20250227_total_protein_sod_plate1.txt', 1, 20250227) %>%  
+                                  dplyr::rename(TP_Absorbance_562nm=absorbance_nm) 
+
+# plate 2
+totalprotein_plate2 <- Spec_to_table('Data/raw_data/superoxide_dismutase/20250227_total_protein_sod_plate2.txt', 2, 20250227) %>%  
+                                  dplyr::rename(TP_Absorbance_562nm=absorbance_nm) 
+
+# master 
+totalprotein_raw <- rbind(totalprotein_plate1, totalprotein_plate2)
+
+```
+
+
+```{r load reference metadata and call target datasets}
+
+metadata <- read.csv('Data/raw_data/plate_metadata.csv', sep = ",", header=T) 
+
+# rename a few columns so they can merge with the data (in next chunk)
+
+# Plate 1 
+meta.SOD_plate1 <- metadata %>% 
+                        dplyr::filter(Assay.Type %in% "Superoxide dismutase" & Plate.Number == 1) %>% 
+                        dplyr::rename(Plate = Plate.Number,
+                                      well  = Well.ID)
+# Plate 2
+meta.SOD_plate2 <- metadata %>% 
+                        dplyr::filter(Assay.Type %in% "Superoxide dismutase" & Plate.Number == 2) %>% 
+                        dplyr::rename(Plate = Plate.Number,
+                                      well  = Well.ID)
+
+
+
+# Plate 1 
+meta.totalprotein_plate1 <- metadata %>% 
+                                  dplyr::filter(Assay.Type %in% "Total protein - Superoxide dismutase" & Plate.Number == 1) %>% 
+                                  dplyr::rename(Plate = Plate.Number,
+                                                well  = Well.ID)
+# Plate 2
+meta.totalprotein_plate2 <- metadata %>% 
+                                  dplyr::filter(Assay.Type %in% "Total protein - Superoxide dismutase" & Plate.Number == 2) %>% 
+                                  dplyr::rename(Plate = Plate.Number,
+                                                well  = Well.ID)
+```
+
+
+* merge metadata with data 
+```{r merge metadata with data}
+
+# Catalase
+# Plate 1 
+SOD_plate1_master <- merge(SOD_plate1, meta.SOD_plate1, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.SOD_plate1) == nrow(SOD_plate1_master) # must be TRUE
+SOD_plate1_master <- subset(SOD_plate1_master, !is.na(Sample.Type)) # now 96  total rows with NAs omitted (not sample, blank nor stnadard)
+
+
+# Plate 2
+SOD_plate2_master <- merge(SOD_plate2, meta.SOD_plate2, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.SOD_plate2) == nrow(SOD_plate2_master) # must be TRUE
+SOD_plate2_master <- subset(SOD_plate2_master, !is.na(Sample.Type)) # now 52  total rows with NAs omitted (not sample, blank nor stnadard)
+
+
+
+
+
+
+# Total protein
+# Plate 1 
+totalprotein_plate1_master <- merge(totalprotein_plate1, meta.totalprotein_plate1, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.totalprotein_plate1) == nrow(totalprotein_plate1_master) # must be TRUE
+totalprotein_plate1_master <- subset(totalprotein_plate1_master, !is.na(Sample.Type)) # now 96  total rows with NAs omitted (not sample, blank nor stnadard)
+
+# Plate 2 
+totalprotein_plate2_master <- merge(totalprotein_plate2, meta.totalprotein_plate2, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.totalprotein_plate2) == nrow(totalprotein_plate2_master) # must be TRUE
+totalprotein_plate2_master <- subset(totalprotein_plate2_master, !is.na(Sample.Type)) # now 58  total rows with NAs omitted (not sample, blank nor stnadard)
+
+```
+
+
+* subset standards, blanks, and samples
+```{r subset data types}
+
+# Catalase 
+# Plate 1 
+SOD_plate1.samples   <- SOD_plate1_master %>% dplyr::filter(Sample.Type %in% 'sample') 
+SOD_plate1.standards <- SOD_plate1_master %>% dplyr::filter(Sample.Type %in% 'standard') 
+
+(nrow(SOD_plate1.samples) + 
+      nrow(SOD_plate1.standards)) == nrow(SOD_plate1_master) # sanity check, must be true
+
+
+# Plate 2
+SOD_plate2.samples   <- SOD_plate2_master %>% dplyr::filter(Sample.Type %in% 'sample') 
+SOD_plate2.standards <- SOD_plate2_master %>% dplyr::filter(Sample.Type %in% 'standard') 
+
+(nrow(SOD_plate2.samples) + 
+      nrow(SOD_plate2.standards)) == nrow(SOD_plate2_master) # sanity check, must be true
+
+
+
+
+
+# Total protein
+# Plate 1 
+totalprotein_plate1.samples    <- totalprotein_plate1_master %>% dplyr::filter(Sample.Type %in% 'sample')
+totalprotein_plate1.blanks     <- totalprotein_plate1_master %>% dplyr::filter(Sample.Type %in% 'blank')
+totalprotein_plate1.standards  <- totalprotein_plate1_master %>% dplyr::filter(Sample.Type %in% c('standard', 'blank'))
+
+(nrow(totalprotein_plate1.samples) + 
+      nrow(totalprotein_plate1.standards)) == nrow(totalprotein_plate1_master) # sanity check, must be true
+
+
+# Plate 2
+totalprotein_plate2.samples    <- totalprotein_plate2_master %>% dplyr::filter(Sample.Type %in% 'sample')
+totalprotein_plate2.blanks     <- totalprotein_plate2_master %>% dplyr::filter(Sample.Type %in% 'blank')
+totalprotein_plate2.standards  <- totalprotein_plate2_master %>% dplyr::filter(Sample.Type %in% c('standard', 'blank'))
+
+(nrow(totalprotein_plate2.samples) + 
+      nrow(totalprotein_plate2.standards)) == nrow(totalprotein_plate2_master) # sanity check, must be true
+
+```
+
+## Total protein calculations 
+
+```{r total protein standard curve}
+
+# assign known BCA values to standard IDs A-I
+BCA_standards <- rbind(totalprotein_plate1.standards, totalprotein_plate2.standards) %>%  
+  dplyr::mutate(BCA_ug_mL = case_when(Standards %in% 'A' ~ 2000,
+                                      Standards %in% 'B' ~ 1500,
+                                      Standards %in% 'C' ~ 1000,
+                                      Standards %in% 'D' ~ 750,
+                                      Standards %in% 'E' ~ 500,
+                                      Standards %in% 'F' ~ 250,
+                                      Standards %in% 'G' ~ 125,
+                                      Standards %in% 'H' ~ 25,
+                                      Standards %in% 'I' ~ 0)) %>% 
+  dplyr::select(Plate, Standards, BCA_ug_mL, TP_Absorbance_562nm)
+
+# Run standard curve, calculate totalprotein 
+BCA_background_zero <- BCA_standards %>% 
+                        dplyr::filter(Standards %in% 'I') %>% # the zero standard
+                        dplyr::group_by(Plate, Standards, BCA_ug_mL) %>% # group by to get the means
+                        dplyr::summarise_each(funs(mean,sd,se=sd(.)/sqrt(n()))) # get all the stats 
+
+
+# Plate 1, blank to correct by is 0.25300
+# Plate 2, blank to correct by is 0.19635
+
+
+
+# Absorbance corrected - take the mean of any duplicates
+BCA_standards_means <- BCA_standards %>% 
+                        dplyr::filter(!BCA_ug_mL %in% 0) %>% 
+                        dplyr::mutate(Abs_562nm_cor = 
+                                      case_when(Plate == 1 ~ (TP_Absorbance_562nm-0.25300),
+                                                Plate == 2 ~ (TP_Absorbance_562nm-0.19635) ) ) %>% 
+                        dplyr::select(-TP_Absorbance_562nm) %>% 
+                        dplyr::group_by(Plate, Standards, BCA_ug_mL) %>% # group by to get the means
+                        dplyr::summarise_each(funs(mean,sd,se=sd(.)/sqrt(n()))) # get all the stats 
+
+
+# plot it insert the quadratic formaula using ggpmisc
+BCA_stand_plots_quadratic <- BCA_standards_means %>% 
+                    # QUADRATIC SMOOTH LINE WORKS BEST HERE (MANUFACTURERS INSTRUCTIONS)
+                     # dplyr::filter(!(Plate %in% 2 & Standards %in% 'D')) %>% # hash me out to test
+                     ggplot(aes(y=mean, x=BCA_ug_mL)) + 
+                        geom_point() +
+                        theme_bw() +
+                        labs(y= "Net Abs 562nm", x = "Protein Concentration in ug/mL") +
+                        #geom_line() +
+                        #stat_poly_line(color='red') +
+                        #geom_smooth() +
+                        stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+                        stat_poly_eq(parse=T, aes(label = ..eq.label..), formula=y ~ x + I(x^2)) +
+                        ggtitle('Total protein: Quadratic curve') +
+                        #stat_poly_eq(use_label(c("eq", "R2"))) +
+                        facet_wrap(~Plate) 
+
+# output 
+pdf(paste("Output/superoxide_dismutase/plots/Total_protein_standard_curves.pdf", sep =''), 
+    width=10, 
+    height=7)
+print(ggarrange(BCA_stand_plots_quadratic))
+dev.off()
+
+```
+
+
+* Use BCA standard curves to calculate TP 
+
+```{r calc TP}
+library(grDevices)
+# Standard curve, Plate 1 equation y = -0.0577 + 0.000751x - 2.36x10^-7x^2 - need to solve for x!
+# Standard curve, Plate 2 equation y = -0.0350 + 0.000813x - 2.05x10^-7x^2 - need to solve for x!
+
+# Standard curve, Plate 1
+a1 <- 2.36*10^-7
+b1 <- 0.000751
+c1 <- 0.0577
+# EQ: (-(b1) + sqrt( (b1^2) - (4*(((a1)-Abs_562nm_cor))*(c1)) ))/(2*a1)
+
+# Standard curve, Plate 2
+a2 <- 2.05*10^-7
+b2 <- 0.000813
+c2 <- 0.0350
+# EQ: (-(b2) + sqrt( (b2^2) - (4*a2*(c2-Abs_562nm_cor)) ) ) / (2*a2)
+
+
+# linear equation plate 1 == (Abs_562nm_cor - 0.192)/0.000993
+# linear equation plate 2 == (Abs_562nm_cor - 0.224)/0.000911
+
+
+# IMPORTANT! we used 25 ul of the standards and 25 ul of the unknowns (samples) 
+# therefore we can interpret the unknown direct to the the standard curve without having 
+# to account for addition factors, fot example, if we used 5 ul unknown (sample) we would have to adjust 
+# by multiplying by 5 to reach the standard curve 
+
+V = 0.025 # 25 ul or 0.025 mL
+
+# Again, remember Plate 1, blank to correct by is 0.1289
+# Again, remember Plate 2, blank to correct by is 0.1336
+
+# Sanity check Lets look at the absorbance vs. totla protein concentration data 
+
+TotalProtein_final <- rbind(totalprotein_plate1.samples, totalprotein_plate2.samples) %>% 
+                      dplyr::select(Plate,
+                                    Sample_ID,
+                                    TP_Absorbance_562nm) %>% 
+                      # dplyr::filter(!Abs_562nm > 3.99) %>% # data as 4.00 is above the detection limit, omit
+                      # dplyr::mutate(Unique_ID = 
+                      #                 paste0('Plate:',Plate,' ',
+                      #                        'ID:',Sample_ID)) %>% # unique ID t0 group by
+                      dplyr::mutate(Abs_562nm_corrected = # correct the raw abs, subtract background
+                                   case_when(Plate == 1 ~ (TP_Absorbance_562nm-0.1289), # for plate 1
+                                             Plate == 2 ~ (TP_Absorbance_562nm-0.1336) ) ) %>% # for plate 2 
+                      dplyr::mutate(TotalProtein_ug_mL = 
+                                    case_when(
+                                      # linear fr neg discrim. - luckily only two values from plate 2
+                                      # Scallop_ID %in% c(33, 51) ~ 
+                                      #   ((Abs_562nm_cor - 0.224)/0.000911),
+                                      # quadratic for Plate 1
+                                      Plate == 1 ~ 
+                                        ((-(b1) + sqrt( (b1^2) - (4*a1*(c1-Abs_562nm_corrected)) ) ) / (2*a1)), 
+                                      # quadratic for plate 2
+                                      Plate == 2 ~ 
+                                        ((-(b2) + sqrt( (b2^2) - (4*a2*(c2-Abs_562nm_corrected)) ) ) / (2*a2)) ),
+                                    # ug per mL concentration to ug in 25 ul sample 
+                                    TotalProtein_ug = TotalProtein_ug_mL*V) %>% 
+                      dplyr::mutate(Dilution_factor = 0, 
+                                    Volume_ul = 25) %>% 
+                      dplyr::mutate(Abs_562nm_raw = TP_Absorbance_562nm) %>% 
+                      dplyr::select(Plate, Sample_ID, Abs_562nm_raw, Abs_562nm_corrected, Dilution_factor, Volume_ul, TotalProtein_ug, TotalProtein_ug_mL)
+
+# View(TotalProtein_final)
+nrow(TotalProtein_final) # 120
+
+# NOTE! I found that some of my discriminants are negative (b^2 - 4ac) IN PLATE 2!! (as 'NaN)
+# so Im going to extrapolate from a linear regression curve based on the final samples 
+
+# first lets plot absorbance and actual concentration calacuated 
+calc_BCA_plot <- TotalProtein_final %>% 
+                    ggplot(aes(y = Abs_562nm_corrected, 
+                               x  = TotalProtein_ug_mL)) +
+                          geom_point() + 
+                    theme_bw() + 
+                    ggtitle('Total protein: Calculated BCA by Net Absorbance') +
+                    facet_wrap(~Plate)
+calc_BCA_plot 
+
+#print
+pdf(paste("Output/superoxide_dismutase/plots/Total_Protein_standard_curves_with_data.pdf", sep =''), 
+    width=10, 
+    height=8)
+ggpubr::ggarrange(BCA_stand_plots_quadratic,
+          calc_BCA_plot,
+          nrow = 2)
+dev.off()
+# write csv
+write.csv(TotalProtein_final, file = "Output/superoxide_dismutase/Total_protein_master.csv")
+
+
+```
+
+
+## CATALASE 
+
+* Generated curve with standards
+  - calculate the mean blank standard as 0 catalase_UmL or Standards 'S7'
+  - correct standards for the blank absorbance 
+  
+  
+* Calcaulate the sample U/mL 
+  - correct absorbance for blank 
+  - use quadratic equation from standard curve to calculate U/mL catalase
+
+
+* STEP 1: Calculate blank absorbance
+
+```{r catalase blank absorbnace}
+
+# Plate 1 means - then calc DA412 = (A412)final – (A412)initial
+Plate1.blanks        <- SOD_plate1.standards %>% dplyr::filter(Standards  == 0)
+Plate1.blank.mean    <- mean(Plate1.blanks$SOD_Absorbance_450nm) # 0.90215
+
+
+# Plate 2 means - then calc DA412 = (A412)final – (A412)initial
+Plate2.blanks        <- SOD_plate2.standards %>% dplyr::filter(Standards  == 0)
+Plate2.blank.mean    <- mean(Plate2.blanks$SOD_Absorbance_450nm) # 1.033
+
+```
+
+* STEP 2: Generate standard curve (correct for blank background abs first!)
+
+  - plate1: y = SSasymp(x, ADD HERE); x = Abs at 450 um, y = sod U mL
+  - plate2: y = SSasymp(x, ADD HERE); x = Abs at 450 um, y = sod U mL
+  
+  * **Important** - 25 ul of sample was measured without dilution for sod This is critical to correct to total protein
+  as our protocol for total protein also used 25 ul per sample - so it will be 1:1 to correct for catalase per total protein
+  
+```{r generate standard curve}
+library(drc) # install.packages('drc')
+## Objectve to subtract the blank from all standards and samples. and build standard curve with equation
+
+# Plate 1
+SOD_plate1.standards$SOD_Absorbance_450nm <- as.numeric(SOD_plate1.standards$SOD_Absorbance_450nm)
+SOD_plate1.standards$Standards <- as.numeric(SOD_plate1.standards$Standards)
+Plate1_standards_meanSE <- SOD_plate1.standards %>% 
+                                    dplyr::rename(Absorbance_450nm_raw = SOD_Absorbance_450nm) %>% 
+                                    dplyr::select(Plate, Absorbance_450nm_raw, Standards) %>% 
+                                    dplyr::group_by(Plate, Standards) %>% 
+                                    dplyr::rename(SOD_UmL = Standards) %>% 
+                                    dplyr::summarise(meanAbs = mean(Absorbance_450nm_raw),
+                                                     sdAbs   = sd(Absorbance_450nm_raw),
+                                                     n = n())
+Plate1_standards_meanSE <- Plate1_standards_meanSE %>% filter(!SOD_UmL %in% c(4,2,1))
+                
+
+Plate1_standards_model <- drm(SOD_UmL ~ meanAbs, data = Plate1_standards_meanSE, fct = LL.4()) # generate four parametr logistic model
+
+newdata_plate1         <- data.frame(meanAbs = seq(min(Plate1_standards_meanSE$meanAbs),
+                                                   max(Plate1_standards_meanSE$meanAbs), length.out = 100))
+predictions_plate1     <- predict(Plate1_standards_model, newdata = newdata_plate1)
+params_plate1          <- coef(Plate1_standards_model) # # Extract parameters
+
+Plate1_fit <- nls(SOD_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha), data = Plate1_standards_meanSE)
+summary(Plate1_fit)
+# Formula: as.numeric(SOD_UmL) ~ SSasymp(meanAbs, yf, y0, log_alpha)
+# Parameters:
+#           Estimate Std. Error t value Pr(>|t|)   
+# yf         0.03124    0.02942   1.062   0.3996   
+# y0         4.56797    2.81780   1.621   0.2464   
+# log_alpha  3.10219    0.26830  11.562   0.0074 **
+equation_plate1        <- sprintf("y = SSasymp(x, %.2f, %.2f, %.2f)",
+                                  summary(Plate1_fit)$coefficients[1], # yf
+                                  summary(Plate1_fit)$coefficients[2], # y0
+                                  summary(Plate1_fit)$coefficients[3] # log_alpha
+                                  )
+
+
+
+Plate1_SOD_curve <- ggplot(Plate1_standards_meanSE, aes(x = meanAbs, y = SOD_UmL)) + # # Plot the data and fitted curve
+                                  geom_point() +
+                                  geom_line(data = data.frame(meanAbs = 
+                                                                newdata_plate1$meanAbs, response = predictions_plate1), 
+                                            aes(x = meanAbs, y = response), color = "blue", size = 1) +
+                                  labs(x = "meanAbs", y = "SOD_UmL", title = "SOD curve Plate 1") +
+                                  annotate("text", x = Inf, y = Inf, label = equation_plate1, hjust = 1, vjust = 1) +
+                                  theme_minimal()
+
+
+
+# plate 2
+SOD_plate2.standards$SOD_Absorbance_450nm <- as.numeric(SOD_plate2.standards$SOD_Absorbance_450nm)
+SOD_plate2.standards$Standards <- as.numeric(SOD_plate2.standards$Standards)
+Plate2_standards_meanSE <- SOD_plate2.standards %>% 
+                                    dplyr::rename(Absorbance_450nm_raw = SOD_Absorbance_450nm) %>% 
+                                    dplyr::select(Plate, Absorbance_450nm_raw, Standards) %>% 
+                                    dplyr::group_by(Plate, Standards) %>% 
+                                    dplyr::rename(SOD_UmL = Standards) %>% 
+                                    dplyr::summarise(meanAbs = mean(Absorbance_450nm_raw),
+                                                     sdAbs   = sd(Absorbance_450nm_raw),
+                                                     n = n())
+Plate2_standards_meanSE <- Plate2_standards_meanSE %>% filter(!SOD_UmL %in% c(4,2,1))
+            
+
+Plate2_standards_model <- drm(SOD_UmL ~ meanAbs, data = Plate2_standards_meanSE, fct = LL.4()) # generate four parametr logistic model
+newdata_plate2         <- data.frame(meanAbs = seq(min(Plate2_standards_meanSE$meanAbs), 
+                                                   max(Plate2_standards_meanSE$meanAbs), length.out = 100))
+predictions_plate2     <- predict(Plate2_standards_model, newdata = newdata_plate2)
+params_plate2          <- coef(Plate2_standards_model) # # Extract parameters
+equation_plate2        <- sprintf("y = %.2f + (%.2f - %.2f) / (1 + (x / %.2f)^%.2f)",
+                                  params_plate2[1], params_plate2[2], params_plate2[1], params_plate2[3], params_plate2[4])
+
+
+
+
+Plate2_fit <- nls(SOD_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha), data = Plate2_standards_meanSE)
+summary(Plate2_fit)
+# Parameters:
+#           Estimate Std. Error t value Pr(>|t|)   
+# yf         0.02149    0.02337   0.920   0.4548   
+# y0         2.88184    0.97920   2.943   0.0987 . 
+# log_alpha  2.70079    0.18773  14.386   0.0048 **
+equation_plate2        <- sprintf("y = SSasymp(x, %.2f, %.2f, %.2f)",
+                                  summary(Plate2_fit)$coefficients[1], # yf
+                                  summary(Plate2_fit)$coefficients[2], # y0
+                                  summary(Plate2_fit)$coefficients[3] # log_alpha
+                                  )
+
+                                  
+Plate2_SOD_curve <- ggplot(Plate2_standards_meanSE, aes(x = meanAbs, y = SOD_UmL)) + # # Plot the data and fitted curve
+                                  geom_point() +
+                                  geom_line(data = data.frame(meanAbs = 
+                                                                newdata_plate2$meanAbs, response = predictions_plate2), 
+                                            aes(x = meanAbs, y = response), color = "blue", size = 1) +
+                                  labs(x = "meanAbs", y = "SOD_UmL", title = "SOD curve Plate 2") +
+                                  annotate("text", x = Inf, y = Inf, label = equation_plate2, hjust = 1, vjust = 1) +
+                                  theme_minimal()
+
+
+# output 
+pdf(paste("Output/superoxide_dismutase/plots/SODUmL_standard_curves.pdf", sep =''), 
+    width=10, 
+    height=6)
+print(ggarrange(Plate1_SOD_curve,Plate2_SOD_curve, nrow = 1))
+dev.off()
+
+```
+
+
+## Calculate catalase
+
+
+* Steps: 
+
+  - assemble the averages for total protein (duplicates) as 'TotalProtein_final_MeanSE'
+  
+  - merge means total protein with the catalase absorbance data
+  
+    - quick sanity check to ensure the merge was successful
+    
+  - calculate catalase using the standard equations from the chunk above
+
+```{r average total protein by sample id}
+library(tidyr)
+
+# first prepare total protein to merge with the catalase samples
+# we want ot take a mean for the total protein value since we measured in duplicate
+# so this below, has 59 unique Ids, this is correct
+TotalProtein_final_MeanSE <- TotalProtein_final %>% 
+                                 dplyr::select(Plate, Sample_ID, TotalProtein_ug) %>% 
+                                 Rmisc::summarySE(measurevar = 'TotalProtein_ug', groupvars = 'Sample_ID') %>% 
+                                 dplyr::select(Sample_ID, TotalProtein_ug)
+nrow(TotalProtein_final_MeanSE) # 59 unique IDs , took the mean for total protein between replicates!
+
+```
+
+```{r merge total protein wit caltalase samples}
+# now bind together all the SOD samples
+SOD_all <- rbind(SOD_plate1.samples, SOD_plate2.samples)
+nrow(SOD_all) # 118
+length(unique(SOD_all$Sample_ID)) # 58 unique sample ids, correct good to go
+
+# merge with total protein
+SOD_all_protein <- merge(SOD_all, # merge calatase all
+                              TotalProtein_final_MeanSE, # with three columns of total protein final
+                              by = "Sample_ID") # by these ccommon columns
+nrow(SOD_all_protein) # 114
+length(unique(SOD_all_protein$Sample_ID)) # 57, which samples did we lose?
+
+```
+
+
+# Calculate catalase 
+
+  * calculation uses the equations shown for the standards in chunks above
+  
+    - before proceeding (to final data and plots) plot a snaity check of standard curves to calculated values by absorbance 
+    
+  * final master dataset of means by sample ID
+  
+  * graph the data as mean SE
+  
+```{r calculate SOD}
+
+SOD_Uml_ngprotein_final <- SOD_all_protein %>% # row bind, merge both together
+                                          dplyr::mutate(
+                                            SOD_UmL = # new column
+                                              case_when( # dependencies of the new column  when...
+                                                Plate %in% 1 ~ SSasymp(SOD_Absorbance_450nm, 0.03, 4.57, 3.10),
+                                                Plate %in% 2 ~ SSasymp(SOD_Absorbance_450nm, 0.02, 2.88, 2.70)
+                                                #Plate %in% 1 ~ 0.82 + (-0.34 - 0.82) / (1 + (Cat_Absorbance_560nm / 24.77)^0.01), # column plate is 1, EQ,
+                                                #Plate %in% 2 ~ 1.66 + (-0.22 - 1.66) / (1 + (Cat_Absorbance_560nm / 5.63)^0.20) # column plate is 2, EQ,
+                                              ),
+                                            SOD_UmL_ng_protein = 
+                                              SOD_UmL / (TotalProtein_ug /1000),
+                                            Treatment = 
+                                              case_when(
+                                                grepl("BL", Sample_ID) ~ "Baseline", 
+                                                grepl("A1|A2|A3|B1|B2|B3", Sample_ID) ~ "Control",
+                                                grepl("A4|A5|A6|B4|B5|B6", Sample_ID) ~ "OA",
+                                                grepl("C1|C2|C3|D1|D2|D3", Sample_ID) ~ "HW"),
+                                            Time = 
+                                              case_when(
+                                                grepl("BL", Sample_ID) ~ "Baseline", 
+                                                grepl("T1", Sample_ID) ~ "1",
+                                                grepl("T2", Sample_ID) ~ "2",
+                                                grepl("T3", Sample_ID) ~ "3")
+                                              ) %>% 
+                                           dplyr::select(Plate, Sample_ID, Treatment, Time, 
+                                                         SOD_Absorbance_450nm, TotalProtein_ug, 
+                                                         SOD_UmL, SOD_UmL_ng_protein)
+                            
+
+# Sanity check figures of standards and calculated values (not corrected for total protein)
+calc_SOD_plot <- SOD_Uml_ngprotein_final %>% 
+                    ggplot(aes(y = SOD_UmL, 
+                               x  = SOD_Absorbance_450nm)) +
+                          geom_point() + 
+                    theme_bw() + 
+                    ggtitle('SOD U mL: Calculated by Absorbance') +
+                    facet_wrap(~Plate, scales  = 'free_y')
+
+Standard_curves_with_SODdata <-  ggpubr::ggarrange(
+                                                  ggpubr::ggarrange(Plate1_SOD_curve, 
+                                                                    Plate2_SOD_curve, nrow =1),
+                                                  calc_SOD_plot, nrow = 2)
+
+pdf(paste("Output/superoxide_dismutase/plots/SODUmL_standard_curves_with_data.pdf", sep =''), 
+    width=10, 
+    height=6)
+print(Standard_curves_with_SODdata)
+dev.off()
+
+# SOD in plate 2 > 1 is outside of our standards window for this approach, 
+# only 2 of them, ommit below in the final_mean_SE
+
+
+
+# final dataset of means by sample ID 
+
+
+SOD_Uml_ngprotein_final_MeanSE <- SOD_Uml_ngprotein_final %>% 
+                                    dplyr::filter(!SOD_UmL > 1) %>%  # ommits 2 datapoints
+                                    Rmisc::summarySE(groupvars = c('Plate','Treatment','Time', 'Sample_ID'), 
+                                                     measurevar = 'SOD_UmL_ng_protein')
+
+
+# plot SOD mean SE
+
+
+pd <- position_dodge2(width = 0.2)
+
+SOD_MeanSE <- SOD_Uml_ngprotein_final_MeanSE %>% 
+  
+                      group_by(Treatment, Time) %>% 
+                      
+                       dplyr::summarise( # summarise to aquire the mean and SE for plotting
+                        SOD_mean = mean(SOD_UmL_ng_protein), # mean
+                        SOD_sd = sd(SOD_UmL_ng_protein), # sd
+                        n = n(), # count
+                        SOD_se = SOD_sd / sqrt(n)) %>% # SE
+                      
+                      # plot it
+                      ggplot(aes(x=Time, y=SOD_mean, group=Treatment)) + 
+                        geom_line(aes(group = factor(Treatment)), size = 0.5, position=position_dodge(.4)) +  # connect a line between variables
+                        # scale_linetype_manual(values=c("solid", "dashed", "dotted")) +
+                        geom_point(aes(shape=Treatment, fill=Treatment), size = 4.5,position=position_dodge(.4)) + 
+                        # scale_shape_manual(values=c(21, 22, 24)) + # filled circle, filled triangle, and X 
+                        # scale_fill_manual(values=c("#009E73","#E69F00", "#CC79A7")) + # fill cicle white, triangle white, and jsut black for the X
+                        geom_errorbar(aes(ymin=(SOD_mean)-(SOD_se), 
+                                          ymax=(SOD_mean)+(SOD_se)), 
+                                      width=0,position=position_dodge(.4)) + # width dtermines the length of the end ticks
+                        # geom_jitter() +
+                        theme_classic() +
+                        theme(panel.grid.major = element_blank(), 
+                              panel.grid.minor = element_blank()) +#,
+                              # legend.position = "none") + 
+                        ggtitle("SOD (UmL ng protein-1)") +
+                        labs(y= "SOD_UmL_ng_protein", x = "Time")
+
+
+ # output files 
+pdf(paste("Output/superoxide_dismutase/plots/SODUmL_ng_protein.pdf", sep =''), 
+    width=8, 
+    height=6)
+print(SOD_MeanSE)
+dev.off()
+
+# write csv
+write.csv(SOD_Uml_ngprotein_final, file = "Output/superoxide_dismutase/SOD_calculated_master.csv")
+write.csv(SOD_Uml_ngprotein_final_MeanSE, file = "Output/superoxide_dismutase/SOD_calculated_masterMeanSE.csv")
+ 
+```
