@@ -94,21 +94,59 @@ Spec_to_table <- function(datapath, platenumber, daterecorded) {
 }
 
 
+Spec_to_table_dfo <- function(datapath, platenumber) {
+  
+# import the data in raw text form exported from the spectrophotometer
+        rawcsvfile <- read.csv(datapath,
+                              header = F,
+                              # skip=3,
+                              fileEncoding="latin1")
+
+        rawmatrix   <- as.matrix((rawcsvfile[-1, -1])[c(1:8),c(1:12)])
+        colnames(rawmatrix) = c("1","2","3","4","5","6","7","8","9","10","11","12")
+        rownames(rawmatrix) = c("A","B","C","D","E","F","G","H")
+        
+        raw_table <- as.data.frame.table(rawmatrix, responseName = "value") %>% 
+                                    dplyr::rename(well_row=Var1, well_column=Var2, absorbance_nm=value) %>% 
+                                    dplyr::mutate(well=paste0(well_row,well_column),
+                                                  # Run_date =daterecorded,# not known
+                                                  Plate=platenumber) %>% 
+                                    dplyr::select(-c(well_row,well_column))
+        # reorder the columns because I prefer it this way..
+        
+        raw_table_ordered <- raw_table[,c(3,2,1)]
+}
 ```
 
 -   Use the spec_to_table to import raw spec txt files and compile to a table, yes that is what it does
 
 ```{r load Catalase raw data and merge}
 
+
+#noaa
+
 # plate 1 
-catalase_plate1 <- Spec_to_table('Data/raw_data/catalase/20250219_catalase_plate1.txt', 1, 20250219) %>%  
+catalase_plate1 <- Spec_to_table('Data/raw_data/noaa/catalase/20250219_catalase_plate1.txt', 1, 20250219) %>%  
                                   dplyr::rename(Cat_Absorbance_560nm=absorbance_nm) 
+
+
+catalase_plate1_dfo <- Spec_to_table_dfo('Data/raw_data/dfo/catalase/CAT_plate1.csv', 1) %>%  
+                                  dplyr::rename(Cat_Absorbance_560nm=absorbance_nm) 
+
+
 # plate 2 
-catalase_plate2 <- Spec_to_table('Data/raw_data/catalase/20250219_catalase_plate2.txt', 2, 20250219) %>%  
+catalase_plate2 <- Spec_to_table('Data/raw_data/noaa/catalase/20250219_catalase_plate2.txt', 2, 20250219) %>%  
                                   dplyr::rename(Cat_Absorbance_560nm=absorbance_nm) 
+
+# plate 2 
+catalase_plate2_dfo <- Spec_to_table_dfo('Data/raw_data/dfo/catalase/CAT_plate2.csv', 2) %>%  
+                                  dplyr::rename(Cat_Absorbance_560nm=absorbance_nm) 
+
+
 
 # master 
 catalase_raw <- rbind(catalase_plate1, catalase_plate2)
+catalase_raw_dfo <- rbind(catalase_plate1_dfo, catalase_plate2_dfo)
 
 ```
 
@@ -131,6 +169,7 @@ totalprotein_raw <- rbind(totalprotein_plate1, totalprotein_plate2)
 ```{r load reference metadata and call target datasets}
 
 metadata <- read.csv('Data/raw_data/plate_metadata.csv', sep = ",", header=T) 
+metadata_dfo <- read.csv('Data/raw_data/dfo/plate_metadata.csv', sep = ",", header=T) 
 
 # rename a few columns so they can merge with the data (in next chunk)
 
@@ -157,11 +196,36 @@ meta.totalprotein_plate2 <- metadata %>%
                                   dplyr::filter(Assay.Type %in% "Total protein - Catalase" & Plate.Number == 2) %>% 
                                   dplyr::rename(Plate = Plate.Number,
                                                 well  = Well.ID)
+
+
+# Plate 1 
+meta.catalase_plate1_dfo <- metadata_dfo %>% 
+                        dplyr::filter(Assay.Type %in% "Catalase" & Plate.Number == 1) %>% 
+                        dplyr::rename(Plate = Plate.Number,
+                                      well  = Well.ID)
+# Plate 2
+meta.catalase_plate2_dfo <- metadata_dfo %>% 
+                        dplyr::filter(Assay.Type %in% "Catalase" & Plate.Number == 2) %>% 
+                        dplyr::rename(Plate = Plate.Number,
+                                      well  = Well.ID)
+
+# DFO DATA
+
+# Plate 1 
+meta.totalprotein_plate1_dfo <- metadata_dfo %>% 
+                                  dplyr::filter(Assay.Type %in% "Total protein" & Plate.Number == 1) %>% 
+                                  dplyr::rename(Plate = Plate.Number,
+                                                well  = Well.ID)
+# Plate 2
+meta.totalprotein_plate2_dfo <- metadata_dfo %>% 
+                                  dplyr::filter(Assay.Type %in% "Total protein" & Plate.Number == 2) %>% 
+                                  dplyr::rename(Plate = Plate.Number,
+                                                well  = Well.ID)
 ```
 
 
 * merge metadata with data 
-```{r merge metadata with data}
+```{r NOAA merge metadata with data}
 
 # Catalase
 # Plate 1 
@@ -202,8 +266,50 @@ totalprotein_plate2_master <- subset(totalprotein_plate2_master, !is.na(Sample.T
 ```
 
 
+```{r DFO merge metadata with data}
+
+# Catalse
+# Plate 1 
+catalase_plate1_master_dfo <- merge(catalase_plate1_dfo, meta.catalase_plate1_dfo, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.catalase_plate1_dfo) == nrow(catalase_plate1_master_dfo) # must be TRUE
+catalase_plate1_master_dfo <- subset(catalase_plate1_master_dfo, !is.na(Sample.Type)) # now 96  total rows with NAs omitted (not sample, blank nor stnadard)
+
+
+# Plate 2
+catalase_plate2_master_dfo <- merge(catalase_plate2_dfo, meta.catalase_plate2_dfo, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.catalase_plate2_dfo) == nrow(catalase_plate2_master_dfo) # must be TRUE
+catalase_plate2_master_dfo <- subset(catalase_plate2_master_dfo, !is.na(Sample.Type)) # now 52  total rows with NAs omitted (not sample, blank nor stnadard)
+
+
+
+
+
+
+# Total protein
+# Plate 1 
+totalprotein_plate1_master_dfo <- merge(totalprotein_plate1_dfo, meta.totalprotein_plate1_dfo, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.totalprotein_plate1_dfo) == nrow(totalprotein_plate1_master_dfo) # must be TRUE
+totalprotein_plate1_master_dfo <- subset(totalprotein_plate1_master_dfo, !is.na(Sample.Type)) # now 96  total rows with NAs omitted (not sample, blank nor stnadard)
+
+# Plate 2 
+totalprotein_plate2_master_dfo <- merge(totalprotein_plate2_dfo, meta.totalprotein_plate2_dfo, 
+                                by = c('Plate', 'well')) 
+
+nrow(meta.totalprotein_plate2_dfo) == nrow(totalprotein_plate2_master_dfo) # must be TRUE
+totalprotein_plate2_master_dfo <- subset(totalprotein_plate2_master_dfo, !is.na(Sample.Type)) # now 58  total rows with NAs omitted (not sample, blank nor stnadard)
+
+```
+
+
+
 * subset standards, blanks, and samples
-```{r subset data types}
+```{r NOAA subset data types}
 
 # Catalase 
 # Plate 1 
@@ -263,9 +369,72 @@ totalprotein_plate2.standards  <- totalprotein_plate2_master %>% dplyr::filter(S
 
 ```
 
+
+
+```{r DFO subset data types}
+
+# Catalase 
+# Plate 1 
+catalase_plate1.samples_dfo   <- catalase_plate1_master_dfo %>% dplyr::filter(Sample.Type %in% 'sample') 
+catalase_plate1.standards_dfo <- catalase_plate1_master_dfo %>% dplyr::filter(Sample.Type %in% 'standard') %>% 
+                                dplyr::mutate(catalase_UmL = case_when(
+                                                                        Standards %in% 'S1' ~ 5,
+                                                                        Standards %in% 'S2' ~ 2.5,
+                                                                        Standards %in% 'S3' ~ 1.25,
+                                                                        Standards %in% 'S4' ~ 0.625,
+                                                                        Standards %in% 'S5' ~ 0.313,
+                                                                        Standards %in% 'S6' ~ 0.156,
+                                                                        Standards %in% 'S7' ~ 0
+                                ))
+
+(nrow(catalase_plate1.samples_dfo) + 
+      nrow(catalase_plate1.standards_dfo)) == nrow(catalase_plate1_master_dfo) # sanity check, must be true
+
+
+# Plate 2
+catalase_plate2.samples_dfo   <- catalase_plate2_master_dfo %>% dplyr::filter(Sample.Type %in% 'sample') 
+catalase_plate2.standards_dfo <- catalase_plate2_master_dfo %>% dplyr::filter(Sample.Type %in% 'standard') %>% 
+                                dplyr::mutate(catalase_UmL = case_when(
+                                                                        Standards %in% 'S1' ~ 5,
+                                                                        Standards %in% 'S2' ~ 2.5,
+                                                                        Standards %in% 'S3' ~ 1.25,
+                                                                        Standards %in% 'S4' ~ 0.625,
+                                                                        Standards %in% 'S5' ~ 0.313,
+                                                                        Standards %in% 'S6' ~ 0.156,
+                                                                        Standards %in% 'S7' ~ 0
+                                ))
+
+(nrow(catalase_plate2.samples_dfo) + 
+      nrow(catalase_plate2.standards_dfo)) == nrow(catalase_plate2_master_dfo) # sanity check, must be true
+
+
+
+
+
+# Total protein
+# Plate 1 
+totalprotein_plate1.samples_dfo    <- totalprotein_plate1_master_dfo %>% dplyr::filter(Sample.Type %in% 'sample')
+totalprotein_plate1.blanks_dfo     <- totalprotein_plate1_master_dfo %>% dplyr::filter(Sample.Type %in% 'blank')
+totalprotein_plate1.standards_dfo  <- totalprotein_plate1_master_dfo %>% dplyr::filter(Sample.Type %in% c('standard', 'blank'))
+
+(nrow(totalprotein_plate1.samples_dfo) + 
+      nrow(totalprotein_plate1.standards_dfo)) == nrow(totalprotein_plate1_master_dfo) # sanity check, must be true
+
+
+# Plate 2
+totalprotein_plate2.samples_dfo    <- totalprotein_plate2_master_dfo %>% dplyr::filter(Sample.Type %in% 'sample')
+totalprotein_plate2.blanks_dfo     <- totalprotein_plate2_master_dfo %>% dplyr::filter(Sample.Type %in% 'blank')
+totalprotein_plate2.standards_dfo  <- totalprotein_plate2_master_dfo %>% dplyr::filter(Sample.Type %in% c('standard', 'blank'))
+
+(nrow(totalprotein_plate2.samples_dfo) + 
+      nrow(totalprotein_plate2.standards_dfo)) == nrow(totalprotein_plate2_master_dfo) # sanity check, must be true
+
+```
+
+
 ## Total protein calculations 
 
-```{r total protein standard curve}
+```{r NOAA total protein standard curve}
 
 # assign known BCA values to standard IDs A-I
 BCA_standards <- rbind(totalprotein_plate1.standards, totalprotein_plate2.standards) %>%  
@@ -321,7 +490,7 @@ BCA_stand_plots_quadratic <- BCA_standards_means %>%
                         facet_wrap(~Plate) 
 
 # output 
-pdf(paste("Output/catalase/plots/Total_protein_standard_curves.pdf", sep =''), 
+pdf(paste("Output/noaa/catalase/plots/Total_protein_standard_curves.pdf", sep =''), 
     width=10, 
     height=7)
 print(ggarrange(BCA_stand_plots_quadratic))
@@ -330,9 +499,74 @@ dev.off()
 ```
 
 
+```{r DFO total protein standard curve}
+
+# assign known BCA values to standard IDs A-I
+BCA_standards_dfo <- rbind(totalprotein_plate1.standards_dfo, totalprotein_plate2.standards_dfo) %>%  
+  dplyr::mutate(BCA_ug_mL = case_when(Standards %in% 'A' ~ 2000,
+                                      Standards %in% 'B' ~ 1500,
+                                      Standards %in% 'C' ~ 1000,
+                                      Standards %in% 'D' ~ 750,
+                                      Standards %in% 'E' ~ 500,
+                                      Standards %in% 'F' ~ 250,
+                                      Standards %in% 'G' ~ 125,
+                                      Standards %in% 'H' ~ 25,
+                                      Standards %in% 'I' ~ 0)) %>% 
+  dplyr::select(Plate, Standards, BCA_ug_mL, TP_Absorbance_562nm)
+
+# Run standard curve, calculate totalprotein 
+BCA_background_zero_dfo <- BCA_standards_dfo %>% 
+                        dplyr::filter(Standards %in% 'I') %>% # the zero standard
+                        dplyr::group_by(Plate, Standards, BCA_ug_mL) %>% # group by to get the means
+                        dplyr::summarise_each(funs(mean,sd,se=sd(.)/sqrt(n()))) # get all the stats 
+
+
+# Plate 1, blank to correct by is 0.09735
+# Plate 2, blank to correct by is 0.10490
+
+
+
+# Absorbance corrected - take the mean of any duplicates
+BCA_standards_means_dfo <- BCA_standards_dfo %>% 
+                        dplyr::filter(!BCA_ug_mL %in% 0) %>% 
+                        dplyr::mutate(Abs_562nm_cor = 
+                                      case_when(Plate == 1 ~ (TP_Absorbance_562nm-0.09735),
+                                                Plate == 2 ~ (TP_Absorbance_562nm-0.10490) ) ) %>% 
+                        dplyr::select(-TP_Absorbance_562nm) %>% 
+                        dplyr::group_by(Plate, Standards, BCA_ug_mL) %>% # group by to get the means
+                        dplyr::summarise_each(funs(mean,sd,se=sd(.)/sqrt(n()))) # get all the stats 
+
+
+# plot it insert the quadratic formaula using ggpmisc
+BCA_stand_plots_quadratic_dfo <- BCA_standards_means_dfo %>% 
+                    # QUADRATIC SMOOTH LINE WORKS BEST HERE (MANUFACTURERS INSTRUCTIONS)
+                     # dplyr::filter(!(Plate %in% 2 & Standards %in% 'D')) %>% # hash me out to test
+                     ggplot(aes(y=mean, x=BCA_ug_mL)) + 
+                        geom_point() +
+                        theme_bw() +
+                        labs(y= "Net Abs 562nm", x = "Protein Concentration in ug/mL") +
+                        #geom_line() +
+                        #stat_poly_line(color='red') +
+                        #geom_smooth() +
+                        stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+                        stat_poly_eq(parse=T, aes(label = ..eq.label..), formula=y ~ x + I(x^2)) +
+                        ggtitle('Total protein: Quadratic curve') +
+                        #stat_poly_eq(use_label(c("eq", "R2"))) +
+                        facet_wrap(~Plate) 
+
+# output 
+pdf(paste("Output/dfo/catalase/plots/Total_protein_standard_curves.pdf", sep =''), 
+    width=10, 
+    height=7)
+print(ggarrange(BCA_stand_plots_quadratic_dfo))
+dev.off()
+
+```
+
+
 * Use BCA standard curves to calculate TP 
 
-```{r calc TP}
+```{r NOAA calc TP}
 library(grDevices)
 # Standard curve, Plate 1 equation y = -0.0189 + 0.00101x - 7.71x10^-8x^2 - need to solve for x!
 # Standard curve, Plate 2 equation y = --0.0189 + 0.00196x - 4.42x10^-7x^2 - need to solve for x!
@@ -420,11 +654,103 @@ ggpubr::ggarrange(BCA_stand_plots_quadratic,
           nrow = 2)
 dev.off()
 # write csv
-write.csv(TotalProtein_final, file = "Output/catalase/Total_protein_master.csv")
+write.csv(TotalProtein_final, file = "Output/noaa/catalase/Total_protein_master.csv")
 
 
 ```
 
+```{r DFO calc TP}
+library(grDevices)
+# Standard curve, Plate 1 equation y = -0.0189 + 0.00101x - 7.71x10^-8x^2 - need to solve for x!
+# Standard curve, Plate 2 equation y = --0.0189 + 0.00196x - 4.42x10^-7x^2 - need to solve for x!
+
+# Standard curve, Plate 1
+a1 <- 4.32*10^-8
+b1 <- 0.00114
+c1 <- 0.0239
+# EQ: (-(b1) + sqrt( (b1^2) - (4*(((a1)-Abs_562nm_cor))*(c1)) ))/(2*a1)
+
+# Standard curve, Plate 2
+a2 <- 8.96*10^-8
+b2 <- 0.00125
+c2 <- 0.0338
+# EQ: (-(b2) + sqrt( (b2^2) - (4*a2*(c2-Abs_562nm_cor)) ) ) / (2*a2)
+
+
+# linear equation plate 1 == (Abs_562nm_cor - 0.192)/0.000993
+# linear equation plate 2 == (Abs_562nm_cor - 0.224)/0.000911
+
+
+# IMPORTANT! we used 25 ul of the standards and 25 ul of the unknowns (samples) 
+# therefore we can interpret the unknown direct to the the standard curve without having 
+# to account for addition factors, fot example, if we used 5 ul unknown (sample) we would have to adjust 
+# by multiplying by 5 to reach the standard curve 
+
+V = 0.025 # 25 ul or 0.025 mL
+
+# Again, remember Plate 1, blank to correct by is 0.1289
+# Again, remember Plate 2, blank to correct by is 0.1336
+
+# Sanity check Lets look at the absorbance vs. totla protein concentration data 
+
+TotalProtein_final_dfo <- rbind(totalprotein_plate1.samples_dfo, totalprotein_plate2.samples_dfo) %>% 
+                      dplyr::select(Plate,
+                                    Sample_ID,
+                                    TP_Absorbance_562nm) %>% 
+                      # dplyr::filter(!Abs_562nm > 3.99) %>% # data as 4.00 is above the detection limit, omit
+                      # dplyr::mutate(Unique_ID = 
+                      #                 paste0('Plate:',Plate,' ',
+                      #                        'ID:',Sample_ID)) %>% # unique ID t0 group by
+                      dplyr::mutate(Abs_562nm_corrected = # correct the raw abs, subtract background
+                                   case_when(Plate == 1 ~ (TP_Absorbance_562nm-0.09735), # for plate 1
+                                             Plate == 2 ~ (TP_Absorbance_562nm-0.10490) ) ) %>% # for plate 2 
+                      dplyr::mutate(TotalProtein_ug_mL = 
+                                    case_when(
+                                      # linear fr neg discrim. - luckily only two values from plate 2
+                                      # Scallop_ID %in% c(33, 51) ~ 
+                                      #   ((Abs_562nm_cor - 0.224)/0.000911),
+                                      # quadratic for Plate 1
+                                      Plate == 1 ~ 
+                                        ((-(b1) + sqrt( (b1^2) - (4*a1*(c1-Abs_562nm_corrected)) ) ) / (2*a1)), 
+                                      # quadratic for plate 2
+                                      Plate == 2 ~ 
+                                        ((-(b2) + sqrt( (b2^2) - (4*a2*(c2-Abs_562nm_corrected)) ) ) / (2*a2)) ),
+                                    # ug per mL concentration to ug in 25 ul sample 
+                                    TotalProtein_ug = TotalProtein_ug_mL*V) %>% 
+                      dplyr::mutate(Dilution_factor = 0, 
+                                    Volume_ul = 25) %>% 
+                      dplyr::mutate(Abs_562nm_raw = TP_Absorbance_562nm) %>% 
+                      dplyr::select(Plate, Sample_ID, Abs_562nm_raw, Abs_562nm_corrected, Dilution_factor, Volume_ul, TotalProtein_ug, TotalProtein_ug_mL)
+
+# View(TotalProtein_final)
+nrow(TotalProtein_final_dfo) # 120
+
+# NOTE! I found that some of my discriminants are negative (b^2 - 4ac) IN PLATE 2!! (as 'NaN)
+# so Im going to extrapolate from a linear regression curve based on the final samples 
+
+# first lets plot absorbance and actual concentration calacuated 
+calc_BCA_plot_dfo <- TotalProtein_final_dfo %>% 
+                    ggplot(aes(y = Abs_562nm_corrected, 
+                               x  = TotalProtein_ug_mL)) +
+                          geom_point() + 
+                    theme_bw() + 
+                    ggtitle('Total protein: Calculated BCA by Net Absorbance') +
+                    facet_wrap(~Plate)
+calc_BCA_plot_dfo 
+
+#print
+pdf(paste("Output/dfo/catalase/plots/Total_Protein_standard_curves_with_data.pdf", sep =''), 
+    width=10, 
+    height=8)
+ggpubr::ggarrange(BCA_stand_plots_quadratic_dfo,
+          calc_BCA_plot_dfo,
+          nrow = 2)
+dev.off()
+# write csv
+write.csv(TotalProtein_final, file = "Output/dfo/catalase/Total_protein_master.csv")
+
+
+```
 
 ## CATALASE 
 
@@ -440,7 +766,7 @@ write.csv(TotalProtein_final, file = "Output/catalase/Total_protein_master.csv")
 
 * STEP 1: Calculate blank absorbance
 
-```{r catalase blank absorbnace}
+```{r NOAA catalase blank absorbnace}
 
 # Plate 1 means - then calc DA412 = (A412)final – (A412)initial
 Plate1.blanks        <- catalase_plate1.standards %>% dplyr::filter(catalase_UmL  == 0)
@@ -453,6 +779,20 @@ Plate2.blank.mean    <- mean(Plate2.blanks$Cat_Absorbance_560nm) # 1.0943
 
 ```
 
+
+```{r DFO catalase blank absorbnace}
+
+# Plate 1 means - then calc DA412 = (A412)final – (A412)initial
+Plate1.blanks_dfo        <- catalase_plate1.standards_dfo %>% dplyr::filter(catalase_UmL  == 0)
+Plate1.blank.mean_dfo    <- mean(Plate1.blanks_dfo$Cat_Absorbance_560nm) # 1.18315
+
+
+# Plate 2 means - then calc DA412 = (A412)final – (A412)initial
+Plate2.blanks_dfo        <- catalase_plate2.standards_dfo %>% dplyr::filter(catalase_UmL  == 0)
+Plate2.blank.mean_dfo    <- mean(Plate2.blanks_dfo$Cat_Absorbance_560nm) # 1.0943
+
+```
+
 * STEP 2: Generate standard curve (correct for blank background abs first!)
 
   - plate1: y = SSasymp(x, 0.34, 7.30, 2.14); x = Abs at 560 um, y = catalase U mL
@@ -461,7 +801,7 @@ Plate2.blank.mean    <- mean(Plate2.blanks$Cat_Absorbance_560nm) # 1.0943
   * **Important** - 25 ul of sample was measured without dilution for catalase. This is critical to correct to total protein
   as our protocol for total protein also used 25 ul per sample - so it will be 1:1 to correct for catalase per total protein
   
-```{r generate standard curve}
+```{r NOAA generate standard curve}
 library(drc) # install.packages('drc')
 ## Objectve to subtract the blank from all standards and samples. and build standard curve with equation
 
@@ -611,7 +951,7 @@ Plate2_Catalase_curve <- ggplot(Plate2_standards_meanSE, aes(x = meanAbs, y = ca
 # y = 0.22 + -0.96*x + 1.77*x^2 + -3.92*x^3 + 1.41*x^4
 
 # output 
-pdf(paste("Output/catalase/plots/CatalaseUmL_standard_curves.pdf", sep =''), 
+pdf(paste("Output/noaa/catalase/plots/CatalaseUmL_standard_curves.pdf", sep =''), 
     width=10, 
     height=6)
 print(ggarrange(Plate1_Catalase_curve,Plate2_Catalase_curve, nrow = 1))
@@ -623,6 +963,169 @@ dev.off()
 
 ```
 
+
+
+```{r DFO generate standard curve}
+library(drc) # install.packages('drc')
+## Objectve to subtract the blank from all standards and samples. and build standard curve with equation
+
+# Plate 1
+Plate1_standards_meanSE_dfo <- catalase_plate1.standards_dfo %>% 
+                                    dplyr::rename(Absorbance_560nm_raw = Cat_Absorbance_560nm) %>% 
+                                    dplyr::select(Plate, Absorbance_560nm_raw, catalase_UmL) %>% 
+                                    dplyr::group_by(Plate, catalase_UmL) %>% 
+                                    dplyr::summarise(meanAbs = mean(Absorbance_560nm_raw),
+                                                     sdAbs   = sd(Absorbance_560nm_raw),
+                                                     n = n())
+Plate1_standards_model_dfo <- drm(catalase_UmL ~ meanAbs, data = Plate1_standards_meanSE_dfo, fct = LL.4()) # generate four parametr logistic model
+newdata_plate1_dfo         <- data.frame(meanAbs = seq(min(Plate1_standards_meanSE_dfo$meanAbs),
+                                                   max(Plate1_standards_meanSE_dfo$meanAbs), length.out = 100))
+predictions_plate1_dfo     <- predict(Plate1_standards_model_dfo, newdata = newdata_plate1_dfo)
+params_plate1_dfo          <- coef(Plate1_standards_model_dfo) # # Extract parameters
+
+# equation_plate1        <- sprintf("y = %.2f + (%.2f - %.2f) / (1 + (x / %.2f)^%.2f)",
+#                                   coef(Plate1_standards_model)[1],
+#                                   coef(Plate1_standards_model)[2],
+#                                   coef(Plate1_standards_model)[1],
+#                                   coef(Plate1_standards_model)[3],
+#                                   coef(Plate1_standards_model)[4])
+
+
+Plate1_fit_dfo <- nls(catalase_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha), data = Plate1_standards_meanSE_dfo)
+summary(Plate1_fit_dfo)
+# Formula: y ~ SSasymp(x, yf, y0, log_alpha)
+# Parameters:
+#           Estimate Std. Error t value Pr(>|t|)   
+# yf          0.3360     0.1966   1.709  0.16266   
+# y0          7.3016     1.1811   6.182  0.00348 **
+# log_alpha   2.1397     0.2744   7.798  0.00146 **
+equation_plate1_dfo        <- sprintf("y = SSasymp(x, %.2f, %.2f, %.2f)",
+                                  summary(Plate1_fit_dfo)$coefficients[1], # yf
+                                  summary(Plate1_fit_dfo)$coefficients[2], # y0
+                                  summary(Plate1_fit_dfo)$coefficients[3] # log_alpha
+                                  )
+
+
+
+
+# Plate1_model <- lm(Plate1_standards_meanSE$catalase_UmL ~ poly( Plate1_standards_meanSE$meanAbs, 4))
+# summary(Plate1_model)$coefficients
+#                                            Estimate Std. Error   t value   Pr(>|t|)
+# (Intercept)                                1.406286  0.1920777  7.321443 0.01814917
+# poly(Plate1_standards_meanSE$meanAbs, 4)1 -3.773888  0.5081897 -7.426139 0.01765440
+# poly(Plate1_standards_meanSE$meanAbs, 4)2  1.681861  0.5081897  3.309513 0.08043806
+# poly(Plate1_standards_meanSE$meanAbs, 4)3 -1.098399  0.5081897 -2.161395 0.16320663
+# poly(Plate1_standards_meanSE$meanAbs, 4)4  0.829503  0.5081897  1.632270 0.24421454
+
+# y = e + dx + cx^2 + bx^3 + ax^4
+
+# equation_plate1        <- sprintf("y = %.2f + %.2f*x + %.2f*x^2 + %.2f*x^3 + %.2f*x^4",
+#                                   summary(Plate1_model)$coefficients[5], # e
+#                                   summary(Plate1_model)$coefficients[4], # d
+#                                   summary(Plate1_model)$coefficients[3], # c
+#                                   summary(Plate1_model)$coefficients[2], # b
+#                                   summary(Plate1_model)$coefficients[1]  # a
+                                  # )
+
+
+
+Plate1_Catalase_curve_dfo <- ggplot(Plate1_standards_meanSE_dfo, aes(x = meanAbs, y = catalase_UmL)) + # # Plot the data and fitted curve
+                                  geom_point() +
+                                  geom_line(data = data.frame(meanAbs = 
+                                                                newdata_plate1_dfo$meanAbs, response = predictions_plate1_dfo), 
+                                            aes(x = meanAbs, y = response), color = "blue", size = 1) +
+                                  labs(x = "meanAbs", y = "catalase_UmL", title = "Catalase curve Plate 1") +
+                                  annotate("text", x = Inf, y = Inf, label = equation_plate1_dfo, hjust = 1, vjust = 1) +
+                                  theme_minimal()
+
+# y = SSasymp(x, 0.34, 7.30, 2.14)
+
+
+
+# plate 2
+
+
+Plate2_standards_meanSE_dfo <- catalase_plate2.standards_dfo %>% 
+                                    dplyr::rename(Absorbance_560nm_raw = Cat_Absorbance_560nm) %>% 
+                                    dplyr::select(Plate, Absorbance_560nm_raw, catalase_UmL) %>% 
+                                    dplyr::group_by(Plate, catalase_UmL) %>% 
+                                    dplyr::summarise(meanAbs = mean(Absorbance_560nm_raw),
+                                                     sdAbs   = sd(Absorbance_560nm_raw),
+                                                     n = n())
+Plate2_standards_model_dfo <- drm(catalase_UmL ~ meanAbs, data = Plate2_standards_meanSE_dfo, fct = LL.4()) # generate four parametr logistic model
+newdata_plate2_dfo         <- data.frame(meanAbs = seq(min(Plate2_standards_meanSE_dfo$meanAbs), max(Plate2_standards_meanSE_dfo$meanAbs), length.out = 100))
+predictions_plate2_dfo     <- predict(Plate2_standards_model_dfo, newdata = newdata_plate2_dfo)
+params_plate2_dfo          <- coef(Plate2_standards_model) # # Extract parameters
+equation_plate2_dfo        <- sprintf("y = %.2f + (%.2f - %.2f) / (1 + (x / %.2f)^%.2f)",
+                                  params_plate2_dfo[1], params_plate2_dfo[2], params_plate2_dfo[1], params_plate2_dfo[3], params_plate2_dfo[4])
+
+
+
+
+Plate2_fit_dfo <- nls(catalase_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha), data = Plate2_standards_meanSE_dfo)
+summary(Plate2_fit_dfo)
+# Formula: catalase_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha)
+# Parameters:
+#           Estimate Std. Error t value Pr(>|t|)    
+# yf         0.09717    0.09858   0.986     0.38    
+# y0         6.34540    0.25645  24.743 1.58e-05 ***
+# log_alpha  1.48719    0.08554  17.385 6.43e-05 ***
+equation_plate2_dfo        <- sprintf("y = SSasymp(x, %.2f, %.2f, %.2f)",
+                                  summary(Plate2_fit_dfo)$coefficients[1], # yf
+                                  summary(Plate2_fit_dfo)$coefficients[2], # y0
+                                  summary(Plate2_fit_dfo)$coefficients[3] # log_alpha
+                                  )
+# y = SSasymp(x, 0.10, 6.35, 1.49)
+
+# Plate2_model <- lm(Plate2_standards_meanSE$catalase_UmL ~ poly( Plate2_standards_meanSE$meanAbs, 4))
+# summary(Plate2_model)$coefficients
+#                                             Estimate Std. Error    t value     Pr(>|t|)
+# (Intercept)                                1.4062857 0.04003263  35.128491 0.0008093819
+# poly(Plate2_standards_meanSE$meanAbs, 4)1 -3.9189487 0.10591637 -37.000405 0.0007296448
+# poly(Plate2_standards_meanSE$meanAbs, 4)2  1.7697783 0.10591637  16.709205 0.0035625650
+# poly(Plate2_standards_meanSE$meanAbs, 4)3 -0.9601472 0.10591637  -9.065144 0.0119511667
+# poly(Plate2_standards_meanSE$meanAbs, 4)4  0.2176236 0.10591637   2.054674 0.1762623456
+
+# y = e + dx + cx^2 + bx^3 + ax^4
+
+# equation_plate2        <- sprintf("y = %.2f + %.2f*x + %.2f*x^2 + %.2f*x^3 + %.2f*x^4",
+#                                   summary(Plate2_model)$coefficients[5], # e
+#                                   summary(Plate2_model)$coefficients[4], # d
+#                                   summary(Plate2_model)$coefficients[3], # c
+#                                   summary(Plate2_model)$coefficients[2], # b
+#                                   summary(Plate2_model)$coefficients[1]  # a
+#                                   )
+
+# equation_plate1        <- sprintf("y = %.2f + %.2f*x + %.2f*x^2 + %.2f*x^3 + %.2f*x^4",
+#                                   summary(Plate1_model)$coefficients[5], # e
+#                                   summary(Plate1_model)$coefficients[4], # d
+#                                   summary(Plate1_model)$coefficients[3], # c
+#                                   summary(Plate1_model)$coefficients[2], # b
+#                                   summary(Plate1_model)$coefficients[1]  # a
+                                  
+Plate2_Catalase_curve_dfo <- ggplot(Plate2_standards_meanSE_dfo, aes(x = meanAbs, y = catalase_UmL)) + # # Plot the data and fitted curve
+                                  geom_point() +
+                                  geom_line(data = data.frame(meanAbs = 
+                                                                newdata_plate1_dfo$meanAbs, response = predictions_plate1_dfo), 
+                                            aes(x = meanAbs, y = response), color = "blue", size = 1) +
+                                  labs(x = "meanAbs", y = "catalase_UmL", title = "Catalase curve Plate 2") +
+                                  annotate("text", x = Inf, y = Inf, label = equation_plate2_dfo, hjust = 1, vjust = 1) +
+                                  theme_minimal()
+
+# y = 0.22 + -0.96*x + 1.77*x^2 + -3.92*x^3 + 1.41*x^4
+
+# output 
+pdf(paste("Output/dfo/catalase/plots/CatalaseUmL_standard_curves.pdf", sep =''), 
+    width=10, 
+    height=6)
+print(ggarrange(Plate1_Catalase_curve_dfo,Plate2_Catalase_curve_dfo, nrow = 1))
+dev.off()
+
+
+
+
+
+```
 
 ## Calculate catalase
 
@@ -637,7 +1140,7 @@ dev.off()
     
   - calculate catalase using the standard equations from the chunk above
 
-```{r average total protein by sample id}
+```{r NOAA average total protein by sample id}
 library(tidyr)
 
 # first prepare total protein to merge with the catalase samples
@@ -651,7 +1154,22 @@ nrow(TotalProtein_final_MeanSE) # 58 unique IDs , took the mean for total protei
 
 ```
 
-```{r merge total protein wit caltalase samples}
+
+```{r DFO average total protein by sample id}
+library(tidyr)
+
+# first prepare total protein to merge with the catalase samples
+# we want ot take a mean for the total protein value since we measured in duplicate
+# so this below, has 59 unique Ids, this is correct
+TotalProtein_final_MeanSE_dfo <- TotalProtein_final_dfo %>% 
+                                 dplyr::select(Plate, Sample_ID, TotalProtein_ug) %>% 
+                                 Rmisc::summarySE(measurevar = 'TotalProtein_ug', groupvars = 'Sample_ID') %>% 
+                                 dplyr::select(Sample_ID, TotalProtein_ug)
+nrow(TotalProtein_final_MeanSE_dfo) # 60 unique IDs , took the mean for total protein between replicates!
+
+```
+
+```{r NOAA merge total protein wit caltalase samples}
 # now bind together all the catalase samples
 catalase_all <- rbind(catalase_plate1.samples, catalase_plate2.samples)
 nrow(catalase_all) # 120
@@ -666,6 +1184,21 @@ length(unique(catalase_all_protein$Sample_ID)) # 58, which samples did we lose?
 
 ```
 
+```{r DFO merge total protein wit caltalase samples}
+# now bind together all the catalase samples
+catalase_all_dfo <- rbind(catalase_plate1.samples_dfo, catalase_plate2.samples_dfo)
+nrow(catalase_all_dfo) # 120
+length(unique(catalase_all_dfo$Sample_ID)) # 60 unique sample ids, correct good to go
+
+# merge with total protein
+catalase_all_protein_dfo <- merge(catalase_all_dfo, # merge calatase all
+                              TotalProtein_final_MeanSE_dfo, # with three columns of total protein final
+                              by = "Sample_ID") # by these ccommon columns
+nrow(catalase_all_protein_dfo) # 120
+length(unique(catalase_all_protein_dfo$Sample_ID)) # 60, which samples did we lose?
+
+```
+
 
 # Calculate catalase 
 
@@ -677,7 +1210,7 @@ length(unique(catalase_all_protein$Sample_ID)) # 58, which samples did we lose?
   
   * graph the data as mean SE
   
-```{r calculate catalase}
+```{r NOAA calculate catalase}
 
 
 Catalase_Uml_ngprotein_final <- catalase_all_protein %>% # row bind, merge both together
@@ -781,3 +1314,112 @@ write.csv(Catalase_Uml_ngprotein_final, file = "Output/catalase/Catalase_calcula
 write.csv(Catalase_Uml_ngprotein_final_MeanSE, file = "Output/catalase/Catalase_calculated_masterMeanSE.csv")
  
 ```
+
+
+```{r DFO calculate catalase}
+
+
+Catalase_Uml_ngprotein_final_dfo <- catalase_all_protein_dfo %>% # row bind, merge both together
+                                          dplyr::mutate(
+                                            Catalase_UmL = # new column
+                                              case_when( # dependencies of the new column  when...
+                                                Plate %in% 1 ~ SSasymp(Cat_Absorbance_560nm, 0.27, 6.83, 1.69),
+                                                Plate %in% 2 ~ SSasymp(Cat_Absorbance_560nm, 0.26, 7.02, 1.88)
+                                                #Plate %in% 1 ~ 0.82 + (-0.34 - 0.82) / (1 + (Cat_Absorbance_560nm / 24.77)^0.01), # column plate is 1, EQ,
+                                                #Plate %in% 2 ~ 1.66 + (-0.22 - 1.66) / (1 + (Cat_Absorbance_560nm / 5.63)^0.20) # column plate is 2, EQ,
+                                              ),
+                                            Catalase_UmL_ng_protein = 
+                                              (Catalase_UmL*Dilution.factor) / (TotalProtein_ug /1000),
+                                            Treatment = 
+                                              case_when(
+                                                grepl("BL", Sample_ID) ~ "Baseline", 
+                                                grepl("A1|A2|A3|B1|B2|B3", Sample_ID) ~ "Control",
+                                                grepl("A4|A5|A6|B4|B5|B6", Sample_ID) ~ "OA",
+                                                grepl("C1|C2|C3|D1|D2|D3", Sample_ID) ~ "HW"),
+                                            Time = 
+                                              case_when(
+                                                grepl("BL", Sample_ID) ~ "Baseline", 
+                                                grepl("T1", Sample_ID) ~ "1",
+                                                grepl("T2", Sample_ID) ~ "2",
+                                                grepl("T3", Sample_ID) ~ "3")
+                                              ) %>% 
+                                           dplyr::select(Plate, Sample_ID, Treatment, Time, Dilution.factor,
+                                                         Cat_Absorbance_560nm, TotalProtein_ug, 
+                                                         Catalase_UmL, Catalase_UmL_ng_protein)
+                            
+
+
+# Sanity check figures of standards and calculated values (not corrected for total protein)
+calc_Catalase_plot_dfo <- Catalase_Uml_ngprotein_final_dfo %>% 
+                    ggplot(aes(y = Catalase_UmL, 
+                               x  = Cat_Absorbance_560nm)) +
+                          geom_point() + 
+                    theme_bw() + 
+                    ggtitle('Catalase U mL: Calculated by Absorbance') +
+                    facet_wrap(~Dilution.factor)
+
+Standard_curves_with_Catalasedata_dfo <-  ggpubr::ggarrange(
+                                                  ggpubr::ggarrange(Plate1_Catalase_curve_dfo, Plate2_Catalase_curve_dfo, nrow =1),
+                                                  calc_Catalase_plot_dfo, nrow = 2)
+
+pdf(paste("Output/dfo/catalase/plots/CatalaseUmL_standard_curves_with_data.pdf", sep =''), 
+    width=10, 
+    height=6)
+print(Standard_curves_with_Catalasedata_dfo)
+dev.off()
+
+# final dataset of means by sample ID 
+
+
+Catalase_Uml_ngprotein_final_MeanSE_dfo <- Catalase_Uml_ngprotein_final_dfo %>% 
+                                              Rmisc::summarySE(groupvars = c('Plate','Treatment','Time', 'Sample_ID'), 
+                                                               measurevar = 'Catalase_UmL_ng_protein')
+
+
+# plot Catalase mean SE
+
+
+pd <- position_dodge2(width = 0.2)
+
+Catalase_MeanSE_dfo <- Catalase_Uml_ngprotein_final_MeanSE_dfo %>% 
+  
+                      group_by(Treatment, Time) %>% 
+                      
+                       dplyr::summarise( # summarise to aquire the mean and SE for plotting
+                        Catalase_mean = mean(Catalase_UmL_ng_protein), # mean
+                        Catalase_sd = sd(Catalase_UmL_ng_protein), # sd
+                        n = n(), # count
+                        Catalase_se = Catalase_sd / sqrt(n)) %>% # SE
+                      
+                      # plot it
+                      ggplot(aes(x=Time, y=Catalase_mean, group=Treatment)) + 
+                        geom_line(aes(group = factor(Treatment)), size = 0.5, position=position_dodge(.4)) +  # connect a line between variables
+                        # scale_linetype_manual(values=c("solid", "dashed", "dotted")) +
+                        geom_point(aes(shape=Treatment, fill=Treatment), size = 4.5,position=position_dodge(.4)) + 
+                        # scale_shape_manual(values=c(21, 22, 24)) + # filled circle, filled triangle, and X 
+                        # scale_fill_manual(values=c("#009E73","#E69F00", "#CC79A7")) + # fill cicle white, triangle white, and jsut black for the X
+                        geom_errorbar(aes(ymin=(Catalase_mean)-(Catalase_se), 
+                                          ymax=(Catalase_mean)+(Catalase_se)), 
+                                      width=0,position=position_dodge(.4)) + # width dtermines the length of the end ticks
+                        # geom_jitter() +
+                        theme_classic() +
+                        theme(panel.grid.major = element_blank(), 
+                              panel.grid.minor = element_blank()) +#,
+                              # legend.position = "none") + 
+                        ggtitle("Catalase (UmL ng protein-1)") +
+                        labs(y= "Catalase_UmL_ng_protein", x = "Time")
+
+
+ # output files 
+pdf(paste("Output/dfo/catalase/plots/CatalaseUmL_ng_protein.pdf", sep =''), 
+    width=8, 
+    height=6)
+print(Catalase_MeanSE_dfo)
+dev.off()
+
+# write csv
+write.csv(Catalase_Uml_ngprotein_final_dfo, file = "Output/dfo/catalase/Catalase_calculated_master.csv")
+write.csv(Catalase_Uml_ngprotein_final_MeanSE_dfo, file = "Output/dfo/catalase/Catalase_calculated_masterMeanSE.csv")
+ 
+```
+

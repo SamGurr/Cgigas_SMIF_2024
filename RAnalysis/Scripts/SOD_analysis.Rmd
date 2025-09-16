@@ -713,7 +713,7 @@ write.csv(TotalProtein_final_dfo, file = "Output/dfo/superoxide_dismutase/Total_
 
 * STEP 1: Calculate blank absorbance
 
-```{r NOAA catalase blank absorbnace}
+```{r NOAA SOD blank absorbnace}
 
 # Plate 1 means - then calc DA412 = (A412)final – (A412)initial
 Plate1.blanks        <- SOD_plate1.standards %>% dplyr::filter(Standards  == 0)
@@ -726,7 +726,7 @@ Plate2.blank.mean    <- mean(Plate2.blanks$SOD_Absorbance_450nm) # 1.033
 
 ```
 
-```{r DFO catalase blank absorbnace}
+```{r DFO SOD blank absorbnace}
 
 # Plate 1 means - then calc DA412 = (A412)final – (A412)initial
 Plate1.blanks_dfo        <- SOD_plate1.standards_dfo %>% dplyr::filter(Standards  == 0)
@@ -873,7 +873,7 @@ Plate1_standards_meanSE_dfo <- SOD_plate1.standards_dfo %>%
                                     dplyr::summarise(meanAbs = mean(Absorbance_450nm_raw),
                                                      sdAbs   = sd(Absorbance_450nm_raw),
                                                      n = n())
-Plate1_standards_meanSE_dfo <- Plate1_standards_meanSE_dfo %>% filter(!SOD_UmL %in% c(0,4,5,8))
+Plate1_standards_meanSE_dfo <- Plate1_standards_meanSE_dfo %>% filter(!SOD_UmL %in% c(4,2,1))
                 
 
 Plate1_standards_model_dfo <- drm(SOD_UmL ~ meanAbs, data = Plate1_standards_meanSE_dfo, fct = LL.4()) # generate four parametr logistic model
@@ -887,10 +887,10 @@ Plate1_fit_dfo <- nls(SOD_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha), data = Plat
 summary(Plate1_fit_dfo)
 # Formula: as.numeric(SOD_UmL) ~ SSasymp(meanAbs, yf, y0, log_alpha)
 # Parameters:
-#           Estimate Std. Error t value Pr(>|t|)   
-# yf         0.03124    0.02942   1.062   0.3996   
-# y0         4.56797    2.81780   1.621   0.2464   
-# log_alpha  3.10219    0.26830  11.562   0.0074 **
+#            Estimate Std. Error t value Pr(>|t|)  
+# yf          0.05540    0.03595   1.541   0.2632  
+# y0         64.70310  143.85998   0.450   0.6969  
+# log_alpha   3.66850    0.44054   8.327   0.0141 *
 equation_plate1_dfo        <- sprintf("y = SSasymp(x, %.2f, %.2f, %.2f)",
                                   summary(Plate1_fit_dfo)$coefficients[1], # yf
                                   summary(Plate1_fit_dfo)$coefficients[2], # y0
@@ -922,7 +922,7 @@ Plate2_standards_meanSE_dfo <- SOD_plate2.standards_dfo %>%
                                     dplyr::summarise(meanAbs = mean(Absorbance_450nm_raw),
                                                      sdAbs   = sd(Absorbance_450nm_raw),
                                                      n = n())
-Plate2_standards_meanSE_dfo <- Plate2_standards_meanSE_dfo %>% filter(!SOD_UmL %in% c(1,8))
+Plate2_standards_meanSE_dfo <- Plate2_standards_meanSE_dfo %>% filter(!SOD_UmL %in% c(4,2,1))
             
 
 Plate2_standards_model_dfo <- drm(SOD_UmL ~ meanAbs, data = Plate2_standards_meanSE_dfo, fct = LL.4()) # generate four parametr logistic model
@@ -944,9 +944,9 @@ Plate2_fit <- nls(SOD_UmL ~ SSasymp(meanAbs, yf, y0, log_alpha), data = Plate2_s
 summary(Plate2_fit)
 # Parameters:
 #           Estimate Std. Error t value Pr(>|t|)   
-# yf         0.02149    0.02337   0.920   0.4548   
-# y0         2.88184    0.97920   2.943   0.0987 . 
-# log_alpha  2.70079    0.18773  14.386   0.0048 **
+# yf         0.01792    0.02488   0.720  0.54611   
+# y0         2.35294    0.73154   3.216  0.08458 . 
+# log_alpha  2.97723    0.19431  15.322  0.00423 **
 equation_plate2_dfo        <- sprintf("y = SSasymp(x, %.2f, %.2f, %.2f)",
                                   summary(Plate2_fit)$coefficients[1], # yf
                                   summary(Plate2_fit)$coefficients[2], # y0
@@ -1151,7 +1151,8 @@ SOD_MeanSE <- SOD_Uml_ngprotein_final_MeanSE %>%
                               panel.grid.minor = element_blank()) +#,
                               # legend.position = "none") + 
                         ggtitle("SOD (UmL ng protein-1)") +
-                        labs(y= "SOD_UmL_ng_protein", x = "Time")
+                        labs(y= "SOD_UmL_ng_protein", x = "Time") + 
+                        facet_wrap(~Treatment)
 
 
  # output files 
@@ -1174,14 +1175,14 @@ SOD_Uml_ngprotein_final_dfo <- SOD_all_protein_dfo %>% # row bind, merge both to
                                           dplyr::mutate(
                                             SOD_UmL = # new column
                                               case_when( # dependencies of the new column  when...
-                                                Plate %in% 1 ~ SSasymp(SOD_Absorbance_450nm, 13.78, -1.40, 0.96),
-                                                Plate %in% 2 ~ SSasymp(SOD_Absorbance_450nm, 13.78, -1.40, 0.96)
+                                                Plate %in% 1 ~ SSasymp(SOD_Absorbance_450nm, 0.06, 64.70, 3.67),
+                                                Plate %in% 2 ~ SSasymp(SOD_Absorbance_450nm, 0.02, 2.35, 2.98) #13.78, -1.40, 0.96)
                                                 #Plate %in% 2 ~ SSasymp(SOD_Absorbance_450nm,  6.96, -17.28, 3.45)
                                                 #Plate %in% 1 ~ 0.82 + (-0.34 - 0.82) / (1 + (Cat_Absorbance_560nm / 24.77)^0.01), # column plate is 1, EQ,
                                                 #Plate %in% 2 ~ 1.66 + (-0.22 - 1.66) / (1 + (Cat_Absorbance_560nm / 5.63)^0.20) # column plate is 2, EQ,
                                               ),
                                             SOD_UmL_ng_protein = 
-                                              SOD_UmL / (TotalProtein_ug /1000),
+                                              (SOD_UmL*Dilution.factor) / (TotalProtein_ug /1000),
                                             Treatment = 
                                               case_when(
                                                 grepl("BL", Sample_ID) ~ "Baseline", 
@@ -1195,7 +1196,7 @@ SOD_Uml_ngprotein_final_dfo <- SOD_all_protein_dfo %>% # row bind, merge both to
                                                 grepl("T2", Sample_ID) ~ "2",
                                                 grepl("T3", Sample_ID) ~ "3")
                                               ) %>% 
-                                           dplyr::select(Plate, Sample_ID, Treatment, Time, 
+                                           dplyr::select(Plate, Sample_ID, Treatment, Time, Dilution.factor, 
                                                          SOD_Absorbance_450nm, TotalProtein_ug, 
                                                          SOD_UmL, SOD_UmL_ng_protein)
                             
@@ -1207,7 +1208,7 @@ calc_SOD_plot_dfo <- SOD_Uml_ngprotein_final_dfo %>%
                           geom_point() + 
                     theme_bw() + 
                     ggtitle('SOD U mL: Calculated by Absorbance') +
-                    facet_wrap(~Plate, scales  = 'free_y')
+                    facet_wrap(~Dilution.factor)
 
 Standard_curves_with_SODdata_dfo <-  ggpubr::ggarrange(
                                                   ggpubr::ggarrange(Plate1_SOD_curve_dfo, 
@@ -1266,7 +1267,8 @@ SOD_MeanSE_dfo <- SOD_Uml_ngprotein_final_MeanSE_dfo %>%
                               panel.grid.minor = element_blank()) +#,
                               # legend.position = "none") + 
                         ggtitle("SOD (UmL ng protein-1)") +
-                        labs(y= "SOD_UmL_ng_protein", x = "Time")
+                        labs(y= "SOD_UmL_ng_protein", x = "Time") + 
+                        face_wrap(~Plate)
 
 
  # output files 
